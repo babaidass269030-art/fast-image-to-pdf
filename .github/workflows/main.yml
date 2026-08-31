@@ -30,7 +30,7 @@ jobs:
 
       - name: Build Web App
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Copy Web Assets
