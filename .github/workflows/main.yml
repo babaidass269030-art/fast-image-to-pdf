@@ -1,0 +1,51 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Web App
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy Web Assets
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/assets
+          rm -rf android/app/src/main/assets/*
+          cp -r dist/* android/app/src/main/assets/
+
+      - name: Build Debug APK
+        working-directory: android
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FastPDF-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
