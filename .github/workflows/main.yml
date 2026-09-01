@@ -23,26 +23,25 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Gradle
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
-      - name: Build Web App
+      - name: Build Web App & Prepare Assets
         run: |
           npm install
           npm run build
-
-      - name: Copy Web Assets
-        shell: bash
-        run: |
           mkdir -p android/app/src/main/assets
           rm -rf android/app/src/main/assets/*
           cp -r dist/* android/app/src/main/assets/
 
+      - name: Make Gradle Executable
+        run: chmod +x android/gradlew
+
       - name: Build Debug APK
         working-directory: android
-        run: gradle assembleDebug
+        run: ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

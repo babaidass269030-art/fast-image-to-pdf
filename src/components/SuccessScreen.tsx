@@ -46,11 +46,14 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({ result, onCreateAn
         });
         return;
       } else if (navigator.share) {
-        await navigator.share({
+        const shareData: ShareData = {
           title: result.fileName,
-          text: `Converted PDF with ${result.pageCount} page(s)`,
-          url: window.location.href,
-        });
+          text: `Converted PDF with ${result.pageCount} page(s): ${result.fileName}`,
+        };
+        if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
+          shareData.url = window.location.href;
+        }
+        await navigator.share(shareData);
         return;
       }
     } catch (err: any) {
