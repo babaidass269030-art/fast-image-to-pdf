@@ -2,7 +2,9 @@ package com.fastimage.pdf;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
@@ -10,7 +12,6 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
-import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -18,6 +19,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 
 public class MainActivity extends Activity {
@@ -25,7 +28,6 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILECHOOSER_RESULTCODE = 1;
-    private Uri lastSavedPdfUri = null;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -46,30 +48,23 @@ public class MainActivity extends Activity {
 
             webView.addJavascriptInterface(new AndroidBridge(), "AndroidApp");
 
-            // সাধারণ ডাউনলোড লিসেনার
-            webView.setDownloadListener(new DownloadListener() {
-                @Override
-                public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
-                    if (url.startsWith("blob:") || url.startsWith("data:")) {
-                        webView.evaluateJavascript("window.extractAndSavePdf('" + url + "', 'download');", null);
-                    }
-                }
-            });
-
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageFinished(WebView view, String url) {
-                    // ব্রাউজারের ভেতর তৈরি হওয়া PDF Blob সরাসরি জাভায় পাঠানো
-                    String js = "window.extractAndSavePdf = function(blobUrl, action) {" +
+                    // বাটন ভেদে সুনির্দিষ্ট অ্যাকশন নেওয়ার নিখুঁত স্ক্রিপ্ট
+                    String js = "window.sendPdfToNative = function(action) {" +
+                                "  var link = document.querySelector('a[download]');" +
+                                "  var href = link ? link.href : (window.lastPdfBlobUrl || '');" +
+                                "  if (!href) return;" +
                                 "  var xhr = new XMLHttpRequest();" +
-                                "  xhr.open('GET', blobUrl, true);" +
+                                "  xhr.open('GET', href, true);" +
                                 "  xhr.responseType = 'blob';" +
                                 "  xhr.onload = function() {" +
                                 "    var reader = new FileReader();" +
                                 "    reader.readAsDataURL(xhr.response);" +
                                 "    reader.onloadend = function() {" +
                                 "      var b64 = reader.result.split(',')[1];" +
-                                "      AndroidApp.processPdfData(b64, 'FastPDF_' + Date.now() + '.pdf', action);" +
+                                "      AndroidApp.handlePdfAction(b64, 'FastPDF_' + Date.now() + '.pdf', action);" +
                                 "    }" +
                                 "  };" +
                                 "  xhr.send();" +
@@ -77,22 +72,23 @@ public class MainActivity extends Activity {
                                 "document.addEventListener('click', function(e) {" +
                                 "  var el = e.target.closest('button, a');" +
                                 "  if (!el) return;" +
-                                "  var txt = (el.innerText || '').toLowerCase();" +
-                                "  var link = document.querySelector('a[download]');" +
-                                "  var href = link ? link.href : '';" +
-                                "  if (txt.includes('download') || txt.includes('save')) {" +
-                                "    if(href) { e.preventDefault(); window.extractAndSavePdf(href, 'save'); }" +
-                                "  } else if (txt.includes('open') || txt.includes('preview')) {" +
-                                "    if(href) { e.preventDefault(); window.extractAndSavePdf(href, 'open'); }" +
-                                "  } else if (txt.includes('share')) {" +
-                                "    if(href) { e.preventDefault(); window.extractAndSavePdf(href, 'share'); }" +
+                                "  var txt = (el.innerText || '').toLowerCase().trim();" +
+                                "  if (txt.includes('share')) {" +
+                                "    e.preventDefault(); e.stopPropagation();" +
+                                "    window.sendPdfToNative('share');" +
+                                "  } else if (txt.includes('open') || txt.includes('full window')) {" +
+                                "    e.preventDefault(); e.stopPropagation();" +
+                                "    window.sendPdfToNative('open');" +
+                                "  } else if (txt.includes('save') || txt.includes('download')) {" +
+                                "    e.preventDefault(); e.stopPropagation();" +
+                                "    window.sendPdfToNative('save');" +
                                 "  }" +
                                 "}, true);";
                     view.evaluateJavascript(js, null);
                 }
             });
 
-            // ফটো ও গ্যালারি পিকার
+            // গ্যালারি পিকার
             webView.setWebChromeClient(new WebChromeClient() {
                 @Override
                 public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
@@ -120,23 +116,31 @@ public class MainActivity extends Activity {
 
     class AndroidBridge {
         @JavascriptInterface
-        public void processPdfData(String base64Data, String filename, String action) {
+        public void handlePdfAction(String base64Data, String filename, String action) {
             try {
                 byte[] pdfBytes = Base64.decode(base64Data, Base64.DEFAULT);
 
+                // শেয়ার ও ওপেন করার জন্য ফাইল ক্যাশে নেওয়া
+                File cachePath = new File(getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), filename);
+                FileOutputStream fos = new FileOutputStream(cachePath);
+                fos.write(pdfBytes);
+                fos.close();
+
+                // মিডিয়া স্টোরে সেভ
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf");
 
+                Uri savedUri;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                    lastSavedPdfUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    savedUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                 } else {
-                    lastSavedPdfUri = getContentResolver().insert(MediaStore.Files.getContentUri("external"), values);
+                    savedUri = getContentResolver().insert(MediaStore.Files.getContentUri("external"), values);
                 }
 
-                if (lastSavedPdfUri != null) {
-                    OutputStream os = getContentResolver().openOutputStream(lastSavedPdfUri);
+                if (savedUri != null) {
+                    OutputStream os = getContentResolver().openOutputStream(savedUri);
                     if (os != null) {
                         os.write(pdfBytes);
                         os.close();
@@ -147,21 +151,29 @@ public class MainActivity extends Activity {
                     if ("share".equalsIgnoreCase(action)) {
                         Intent shareIntent = new Intent(Intent.ACTION_SEND);
                         shareIntent.setType("application/pdf");
-                        shareIntent.putExtra(Intent.EXTRA_STREAM, lastSavedPdfUri);
+                        shareIntent.putExtra(Intent.EXTRA_STREAM, savedUri);
                         shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                         startActivity(Intent.createChooser(shareIntent, "Share PDF using"));
                     } else if ("open".equalsIgnoreCase(action)) {
                         Intent viewIntent = new Intent(Intent.ACTION_VIEW);
-                        viewIntent.setDataAndType(lastSavedPdfUri, "application/pdf");
+                        viewIntent.setDataAndType(savedUri, "application/pdf");
                         viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                         startActivity(Intent.createChooser(viewIntent, "Open PDF with"));
                     } else {
-                        Toast.makeText(MainActivity.this, "PDF Downloaded to Downloads folder", Toast.LENGTH_LONG).show();
+                        // ডাউনলোড নোটিফিকেশন ও বার্তা
+                        try {
+                            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                            if (dm != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                                dm.addCompletedDownload(filename, "Fast PDF Generated File", true, "application/pdf", cachePath.getAbsolutePath(), pdfBytes.length, true);
+                            }
+                        } catch (Exception ignored) {}
+
+                        Toast.makeText(MainActivity.this, "✓ Download Complete! Check Downloads", Toast.LENGTH_SHORT).show();
                     }
                 });
 
             } catch (Exception e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Failed to save file", Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Operation Failed", Toast.LENGTH_SHORT).show());
             }
         }
     }
@@ -198,4 +210,3 @@ public class MainActivity extends Activity {
         }
     }
 }
-
