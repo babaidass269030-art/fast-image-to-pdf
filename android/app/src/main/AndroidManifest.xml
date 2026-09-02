@@ -17,6 +17,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
 
+        <!-- Start.io App ID কনফিগারেশন -->
+        <meta-data
+            android:name="com.startapp.sdk.APPLICATION_ID"
+            android:value="207781120" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
