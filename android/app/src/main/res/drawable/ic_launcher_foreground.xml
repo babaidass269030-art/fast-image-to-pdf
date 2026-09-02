@@ -4,22 +4,25 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:scaleX="0.65"
-        android:scaleY="0.65"
-        android:translateX="18.9"
-        android:translateY="18.9">
-        <!-- White Document Base -->
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M24,14 L62,14 L84,36 L84,94 L24,94 Z" />
-        <!-- Folded Corner -->
-        <path
-            android:fillColor="#BFDBFE"
-            android:pathData="M62,14 L84,36 L62,36 Z" />
-        <!-- Red PDF Center Banner -->
-        <path
-            android:fillColor="#EF4444"
-            android:pathData="M28,52 L80,52 A4,4 0 0,1 84,56 L84,72 A4,4 0 0,1 80,76 L28,76 A4,4 0 0,1 24,72 L24,56 A4,4 0 0,1 28,52 Z" />
-    </group>
+
+    <!-- ডকুমেন্ট পেজ আউটলাইন/কাটআউট -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.22"
+        android:pathData="M30,22 L62,22 L78,38 L78,86 C78,88.2 76.2,90 74,90 L30,90 C27.8,90 26,88.2 26,86 L26,26 C26,23.8 27.8,22 30,22 Z" />
+
+    <!-- 'P' অক্ষর -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M27,44 L41,44 C45.5,44 48.5,46.8 48.5,50.8 C48.5,54.8 45.5,57.6 41,57.6 L33.5,57.6 L33.5,68 L27,68 Z M33.5,49.5 L33.5,52.2 L40,52.2 C41.8,52.2 42.8,51.4 42.8,50.8 C42.8,50.2 41.8,49.5 40,49.5 Z" />
+
+    <!-- 'D' অক্ষর -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51,44 L60,44 C67.5,44 72.5,49 72.5,56 C72.5,63 67.5,68 60,68 L51,68 Z M57.5,49.5 L57.5,62.5 L60,62.5 C64,62.5 66.5,59.8 66.5,56 C66.5,52.2 64,49.5 60,49.5 Z" />
+
+    <!-- 'F' অক্ষর -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M75,44 L90,44 L90,49.5 L81.5,49.5 L81.5,53.5 L88.5,53.5 L88.5,58.5 L81.5,58.5 L81.5,68 L75,68 Z" />
 </vector>
