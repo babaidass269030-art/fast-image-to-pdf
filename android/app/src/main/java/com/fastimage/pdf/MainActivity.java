@@ -17,6 +17,9 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 
 public class MainActivity extends Activity {
@@ -24,6 +27,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILECHOOSER_RESULTCODE = 1;
+    private Uri lastSavedUri = null;
+    private File lastSavedFile = null;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -41,15 +46,16 @@ public class MainActivity extends Activity {
             settings.setAllowContentAccess(true);
             settings.setAllowFileAccessFromFileURLs(true);
             settings.setAllowUniversalAccessFromFileURLs(true);
+            settings.setJavaScriptCanOpenWindowsAutomatically(true);
+            settings.setSupportMultipleWindows(true);
 
-            // জাভাস্ক্রিপ্ট থেকে PDF ডাউনলোড ও শেয়ার নেওয়ার জন্য ইন্টারফেস
             webView.addJavascriptInterface(new AndroidBridge(), "AndroidApp");
 
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageFinished(WebView view, String url) {
-                    // ব্রাউজারের ডাউনলোড ক্লিককে Native App-এ রিডাইরেক্ট করার স্ক্রিপ্ট
-                    String js = "window.downloadBlob = function(blobUrl, filename) {" +
+                    // বাটন ক্লিকের ইভেন্টগুলো Native জাভায় রিডাইরেক্ট করা
+                    String js = "window.downloadBlob = function(blobUrl, filename, actionType) {" +
                                 "  var xhr = new XMLHttpRequest();" +
                                 "  xhr.open('GET', blobUrl, true);" +
                                 "  xhr.responseType = 'blob';" +
@@ -58,24 +64,34 @@ public class MainActivity extends Activity {
                                 "    reader.readAsDataURL(xhr.response);" +
                                 "    reader.onloadend = function() {" +
                                 "      var base64data = reader.result.split(',')[1];" +
-                                "      AndroidApp.savePdf(base64data, filename);" +
+                                "      AndroidApp.handlePdfAction(base64data, filename, actionType);" +
                                 "    }" +
                                 "  };" +
                                 "  xhr.send();" +
                                 "};" +
                                 "document.addEventListener('click', function(e) {" +
+                                "  var btn = e.target.closest('button, a');" +
+                                "  if (!btn) return;" +
+                                "  var text = (btn.innerText || '').toLowerCase();" +
                                 "  var target = e.target.closest('a');" +
-                                "  if (target && target.href && (target.href.startsWith('blob:') || target.href.startsWith('data:'))) {" +
+                                "  var blobUrl = target ? target.href : (window.lastPdfBlobUrl || '');" +
+                                "  if (text.includes('share')) {" +
                                 "    e.preventDefault();" +
-                                "    var name = target.getAttribute('download') || 'FastPDF_' + Date.now() + '.pdf';" +
-                                "    window.downloadBlob(target.href, name);" +
+                                "    if(blobUrl) window.downloadBlob(blobUrl, 'FastPDF_Share.pdf', 'share');" +
+                                "    else AndroidApp.shareLastPdf();" +
+                                "  } else if (text.includes('open') || text.includes('full window')) {" +
+                                "    e.preventDefault();" +
+                                "    if(blobUrl) window.downloadBlob(blobUrl, 'FastPDF_Doc.pdf', 'open');" +
+                                "    else AndroidApp.openLastPdf();" +
+                                "  } else if (text.includes('save') || text.includes('download')) {" +
+                                "    e.preventDefault();" +
+                                "    if(blobUrl) window.downloadBlob(blobUrl, 'FastPDF_' + Date.now() + '.pdf', 'save');" +
                                 "  }" +
                                 "}, true);";
                     view.evaluateJavascript(js, null);
                 }
             });
 
-            // ইমেজ পিকার হ্যান্ডলার
             webView.setWebChromeClient(new WebChromeClient() {
                 @Override
                 public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
@@ -101,47 +117,94 @@ public class MainActivity extends Activity {
         }
     }
 
-    // PDF ফাইল সেভ এবং শেয়ার করার নেটিভ মেথড
     class AndroidBridge {
         @JavascriptInterface
-        public void savePdf(String base64Data, String filename) {
+        public void handlePdfAction(String base64Data, String filename, String actionType) {
             try {
                 byte[] pdfBytes = Base64.decode(base64Data, Base64.DEFAULT);
-                Uri uri;
+
+                // শেয়ার এবং ওপেন করার জন্য ক্যাশ ডিরেক্টরিতে সেভ
+                File cacheDir = new File(getCacheDir(), "shared_pdfs");
+                if (!cacheDir.exists()) cacheDir.mkdirs();
+                File tempFile = new File(cacheDir, filename.endsWith(".pdf") ? filename : filename + ".pdf");
+                FileOutputStream fos = new FileOutputStream(tempFile);
+                fos.write(pdfBytes);
+                fos.close();
+                lastSavedFile = tempFile;
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     ContentValues values = new ContentValues();
                     values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
                     values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf");
                     values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                    uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    lastSavedUri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                 } else {
                     ContentValues values = new ContentValues();
                     values.put(MediaStore.MediaColumns.DISPLAY_NAME, filename);
                     values.put(MediaStore.MediaColumns.MIME_TYPE, "application/pdf");
-                    uri = getContentResolver().insert(MediaStore.Files.getContentUri("external"), values);
+                    lastSavedUri = getContentResolver().insert(MediaStore.Files.getContentUri("external"), values);
                 }
 
-                if (uri != null) {
-                    OutputStream os = getContentResolver().openOutputStream(uri);
+                if (lastSavedUri != null) {
+                    OutputStream os = getContentResolver().openOutputStream(lastSavedUri);
                     if (os != null) {
                         os.write(pdfBytes);
                         os.close();
                     }
-
-                    runOnUiThread(() -> {
-                        Toast.makeText(MainActivity.this, "PDF Downloaded to Downloads folder", Toast.LENGTH_LONG).show();
-                        
-                        // সেভ হওয়ার পর ফাইলটি সরাসরি ওপেন/শেয়ার করার ডায়ালগ
-                        Intent shareIntent = new Intent(Intent.ACTION_VIEW);
-                        shareIntent.setDataAndType(uri, "application/pdf");
-                        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        startActivity(Intent.createChooser(shareIntent, "Open PDF with"));
-                    });
                 }
+
+                runOnUiThread(() -> {
+                    if ("share".equalsIgnoreCase(actionType)) {
+                        shareLastPdf();
+                    } else if ("open".equalsIgnoreCase(actionType)) {
+                        openLastPdf();
+                    } else {
+                        Toast.makeText(MainActivity.this, "PDF Saved to Downloads!", Toast.LENGTH_SHORT).show();
+                    }
+                });
+
             } catch (Exception e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Error saving PDF", Toast.LENGTH_SHORT).show());
+                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Operation failed", Toast.LENGTH_SHORT).show());
             }
+        }
+
+        @JavascriptInterface
+        public void shareLastPdf() {
+            runOnUiThread(() -> {
+                try {
+                    if (lastSavedFile == null || !lastSavedFile.exists()) {
+                        Toast.makeText(MainActivity.this, "Save PDF first to share", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    Uri fileUri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".provider", lastSavedFile);
+                    Intent intent = new Intent(Intent.ACTION_SEND);
+                    intent.setType("application/pdf");
+                    intent.putExtra(Intent.EXTRA_STREAM, fileUri);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(intent, "Share PDF via"));
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "Share Error", Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void openLastPdf() {
+            runOnUiThread(() -> {
+                try {
+                    if (lastSavedFile == null || !lastSavedFile.exists()) {
+                        Toast.makeText(MainActivity.this, "File not ready to open", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    Uri fileUri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".provider", lastSavedFile);
+                    Intent intent = new Intent(Intent.ACTION_VIEW);
+                    intent.setDataAndType(fileUri, "application/pdf");
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(intent, "Open PDF"));
+                } catch (Exception e) {
+                    Toast.makeText(MainActivity.this, "Open Error", Toast.LENGTH_SHORT).show();
+                }
+            });
         }
     }
 
@@ -149,7 +212,6 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILECHOOSER_RESULTCODE) {
             if (uploadMessage == null) return;
-
             Uri[] results = null;
             if (resultCode == Activity.RESULT_OK && data != null) {
                 if (data.getClipData() != null) {
