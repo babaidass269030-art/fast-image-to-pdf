@@ -11,7 +11,9 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -19,7 +21,14 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.Toast;
+
+import com.startapp.sdk.ads.banner.Banner;
+import com.startapp.sdk.adsbase.StartAppAd;
+import com.startapp.sdk.adsbase.StartAppSDK;
+
 import java.io.OutputStream;
 
 public class MainActivity extends Activity {
@@ -27,58 +36,98 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILECHOOSER_RESULTCODE = 1;
+    private StartAppAd startAppAd;
+    private long lastInterstitialTime = 0;
+    private static final long MIN_AD_INTERVAL_MS = 60000; // ন্যূনতম ১ মিনিটের ব্যবধান
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // ১. কালো হেডিং বার সরানো
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         super.onCreate(savedInstanceState);
 
-        // ২. ওপরের স্ট্যাটাস বার সাদা ও পরিষ্কার করা
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
             getWindow().setStatusBarColor(Color.WHITE);
         }
 
-        try {
-            webView = new WebView(this);
-            setContentView(webView);
+        // Start.io SDK ইনিশিয়ালাইজেশন (App ID: 207781120)
+        StartAppSDK.init(this, "207781120", false);
+        StartAppSDK.enableReturnAds(false); // অ্যাপ মিনিমাইজ করে ফিরলে বিরক্তি এড়াতে অ্যাড বন্ধ
+        startAppAd = new StartAppAd(this);
 
-            WebSettings settings = webView.getSettings();
-            settings.setJavaScriptEnabled(true);
-            settings.setDomStorageEnabled(true);
-            settings.setAllowFileAccess(true);
-            settings.setAllowContentAccess(true);
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setAllowUniversalAccessFromFileURLs(true);
+        // মূল লেআউট তৈরি
+        LinearLayout rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
 
-            webView.addJavascriptInterface(new AndroidBridge(), "AndroidApp");
-            webView.setWebViewClient(new WebViewClient());
+        // WebView কন্টেইনার
+        FrameLayout webViewContainer = new FrameLayout(this);
+        LinearLayout.LayoutParams webViewParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                0,
+                1.0f);
+        webViewContainer.setLayoutParams(webViewParams);
 
-            webView.setWebChromeClient(new WebChromeClient() {
-                @Override
-                public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                    if (uploadMessage != null) {
-                        uploadMessage.onReceiveValue(null);
-                        uploadMessage = null;
-                    }
-                    uploadMessage = filePathCallback;
+        webView = new WebView(this);
+        webView.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        webViewContainer.addView(webView);
+        rootLayout.addView(webViewContainer);
 
-                    Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    intent.setType("image/*");
-                    intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        // স্ক্রিনের নিচে ব্যানার অ্যাড
+        FrameLayout bannerContainer = new FrameLayout(this);
+        LinearLayout.LayoutParams bannerParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        bannerContainer.setLayoutParams(bannerParams);
+        bannerContainer.setBackgroundColor(Color.parseColor("#F8FAFC"));
 
-                    startActivityForResult(Intent.createChooser(intent, "Select Images"), FILECHOOSER_RESULTCODE);
-                    return true;
+        Banner startAppBanner = new Banner(this);
+        FrameLayout.LayoutParams bannerViewParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_HORIZONTAL);
+        bannerContainer.addView(startAppBanner, bannerViewParams);
+        rootLayout.addView(bannerContainer);
+
+        setContentView(rootLayout);
+
+        // WebView সেটিংস
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(true);
+        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(true);
+
+        webView.addJavascriptInterface(new AndroidBridge(), "AndroidApp");
+        webView.setWebViewClient(new WebViewClient());
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (uploadMessage != null) {
+                    uploadMessage.onReceiveValue(null);
+                    uploadMessage = null;
                 }
-            });
+                uploadMessage = filePathCallback;
 
-            webView.loadUrl("file:///android_asset/index.html");
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("image/*");
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+
+                startActivityForResult(Intent.createChooser(intent, "Select Images"), FILECHOOSER_RESULTCODE);
+                return true;
+            }
+        });
+
+        webView.loadUrl("file:///android_asset/index.html");
     }
 
     class AndroidBridge {
@@ -126,6 +175,20 @@ public class MainActivity extends Activity {
 
             } catch (Exception e) {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "Action Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+            }
+        }
+
+        // React-এর handleCreateAnother থেকে কল হলে নন-ইনট্রুসিভ অ্যাড ট্রিগার
+        @JavascriptInterface
+        public void showInterstitial() {
+            long now = System.currentTimeMillis();
+            if (now - lastInterstitialTime >= MIN_AD_INTERVAL_MS) {
+                runOnUiThread(() -> {
+                    if (startAppAd != null) {
+                        startAppAd.showAd();
+                        lastInterstitialTime = System.currentTimeMillis();
+                    }
+                });
             }
         }
     }
