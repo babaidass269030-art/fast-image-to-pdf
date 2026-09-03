@@ -1,6 +1,6 @@
 {
   "name": "Fast Image to PDF Converter",
   "description": "A clean, modern, and fast local image to PDF converter for mobile and web.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

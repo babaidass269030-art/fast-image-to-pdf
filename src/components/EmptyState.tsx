@@ -1,70 +1,46 @@
 import React, { useRef } from 'react';
-import { UploadCloud, Camera, Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon, Camera, Layers, ShieldCheck, Zap } from 'lucide-react';
 
-interface EmptyStateProps {
-  onFilesSelected: (files: FileList | File[]) => void;
-  onNotice: (msg: string) => void;
-}
-
-export const EmptyState: React.FC<EmptyStateProps> = ({ onFilesSelected, onNotice }) => {
+export const EmptyState: React.FC<{ onFilesSelected: (files: FileList | File[]) => void }> = ({ onFilesSelected }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      onFilesSelected(e.target.files);
-      e.target.value = ''; // Reset input for next time
-    }
-  };
-
   return (
-    <div className="flex-1 flex flex-col items-center justify-center py-12 px-4 animate-fadeIn">
-      <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6 shadow-sm">
-        <UploadCloud className="w-10 h-10" />
+    <div className="flex-1 flex flex-col items-center justify-center p-4 animate-fadeIn">
+      <div className="bg-white dark:bg-slate-800 rounded-[2rem] p-8 max-w-md w-full shadow-sm border border-slate-100 dark:border-slate-700 text-center mb-8">
+        <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-6 transform rotate-3">
+          <ImageIcon className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-3">Select Images to Convert</h2>
+        <p className="text-slate-500 dark:text-slate-400 text-sm mb-8">Choose photos or documents from your device to merge them into a single high-quality PDF.</p>
+        
+        <div className="space-y-3">
+          <button onClick={() => fileInputRef.current?.click()} className="w-full py-4 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl flex items-center justify-center gap-2 transition active:scale-[0.98] cursor-pointer">
+            <ImageIcon className="w-5 h-5" /> Select Images
+          </button>
+          <button onClick={() => cameraInputRef.current?.click()} className="w-full py-4 px-4 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium rounded-xl flex items-center justify-center gap-2 transition active:scale-[0.98] cursor-pointer">
+            <Camera className="w-5 h-5" /> Take Photo
+          </button>
+        </div>
       </div>
-      <h2 className="text-2xl font-bold text-slate-800 mb-2">Create PDF from Images</h2>
-      <p className="text-slate-500 text-center max-w-sm mb-8 text-sm">
-        Fast, secure, and 100% on-device. Your files never leave your phone.
-      </p>
-
-      <div className="flex flex-col sm:flex-row w-full max-w-xs gap-3">
-        {/* গ্যালারি বাটন */}
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="w-full py-3.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl flex items-center justify-center gap-2 transition active:scale-[0.98] shadow-sm cursor-pointer"
-        >
-          <ImageIcon className="w-5 h-5" />
-          <span>Choose Photos</span>
-        </button>
-
-        {/* লাইভ ক্যামেরা বাটন */}
-        <button
-          onClick={() => cameraInputRef.current?.click()}
-          className="w-full py-3.5 px-4 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium rounded-xl flex items-center justify-center gap-2 transition active:scale-[0.98] shadow-sm cursor-pointer"
-        >
-          <Camera className="w-5 h-5" />
-          <span>Take Photo</span>
-        </button>
+      
+      <div className="grid grid-cols-3 gap-3 w-full max-w-md">
+        <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl text-center border border-slate-100 dark:border-slate-700 shadow-sm flex flex-col items-center">
+          <Layers className="w-6 h-6 text-blue-500 mb-2" />
+          <h4 className="text-xs font-bold text-slate-800 dark:text-white">Multi-Page</h4>
+        </div>
+        <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl text-center border border-slate-100 dark:border-slate-700 shadow-sm flex flex-col items-center">
+          <ShieldCheck className="w-6 h-6 text-emerald-500 mb-2" />
+          <h4 className="text-xs font-bold text-slate-800 dark:text-white">100% Private</h4>
+        </div>
+        <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl text-center border border-slate-100 dark:border-slate-700 shadow-sm flex flex-col items-center">
+          <Zap className="w-6 h-6 text-amber-500 mb-2" />
+          <h4 className="text-xs font-bold text-slate-800 dark:text-white">Fast & Crisp</h4>
+        </div>
       </div>
 
-      {/* Hidden Inputs (These do the actual work) */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileChange}
-        accept="image/*"
-        multiple
-        className="hidden"
-        id="add-more-file-input"
-      />
-      <input
-        type="file"
-        ref={cameraInputRef}
-        onChange={handleFileChange}
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-      />
+      <input type="file" ref={fileInputRef} onChange={(e) => e.target.files && onFilesSelected(e.target.files)} accept="image/*" multiple className="hidden" />
+      <input type="file" ref={cameraInputRef} onChange={(e) => e.target.files && onFilesSelected(e.target.files)} accept="image/*" capture="environment" className="hidden" />
     </div>
   );
 };
