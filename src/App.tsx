@@ -5,9 +5,8 @@
 
 import React, { useState, useCallback } from 'react';
 import { SelectedImage, PdfSettings, ProgressState, GeneratedPdfResult } from './types';
-import { formatFileSize, generateId, getImageDimensions, generateDefaultPdfFileName } from './utils/formatters';
+import { formatFileSize, generateId, getImageDimensions } from './utils/formatters';
 import { generatePdf } from './utils/pdfGenerator';
-import { showStartIoInterstitial } from './utils/startIoBridge';
 import { Header } from './components/Header';
 import { EmptyState } from './components/EmptyState';
 import { ImageGrid } from './components/ImageGrid';
@@ -15,8 +14,7 @@ import { PdfOptionsModal } from './components/PdfOptionsModal';
 import { ProgressModal } from './components/ProgressModal';
 import { SuccessScreen } from './components/SuccessScreen';
 import { AboutModal } from './components/AboutModal';
-import { StartIoBanner } from './components/StartIoBanner';
-import { FileText, ArrowRight, AlertCircle, Info, ShieldCheck, Heart } from 'lucide-react';
+import { FileText, ArrowRight, AlertCircle, Info } from 'lucide-react';
 
 export default function App() {
   const [images, setImages] = useState<SelectedImage[]>([]);
@@ -54,7 +52,6 @@ export default function App() {
     setIsAboutOpen(true);
   };
 
-  // Add multiple files from device file picker or drop zone
   const handleAddFiles = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter(
       (file) =>
@@ -101,7 +98,6 @@ export default function App() {
     }
   }, []);
 
-  // Remove single image
   const handleRemoveImage = (id: string) => {
     setImages((prev) => {
       const itemToRemove = prev.find((item) => item.id === id);
@@ -112,14 +108,12 @@ export default function App() {
     });
   };
 
-  // Rotate image 90 degrees clockwise
   const handleRotateImage = (id: string) => {
     setImages((prev) =>
       prev.map((img) => (img.id === id ? { ...img, rotation: (img.rotation + 90) % 360 } : img))
     );
   };
 
-  // Reorder images via drag-and-drop or programmatic shift
   const handleReorder = (sourceIndex: number, targetIndex: number) => {
     if (sourceIndex === targetIndex || sourceIndex < 0 || targetIndex < 0) return;
     setImages((prev) => {
@@ -131,19 +125,16 @@ export default function App() {
     });
   };
 
-  // Move image earlier in order
   const handleMoveUp = (index: number) => {
     if (index <= 0) return;
     handleReorder(index, index - 1);
   };
 
-  // Move image later in order
   const handleMoveDown = (index: number) => {
     if (index >= images.length - 1) return;
     handleReorder(index, index + 1);
   };
 
-  // Clear all selected images
   const handleClearAll = () => {
     images.forEach((img) => {
       if (img.previewUrl.startsWith('blob:')) {
@@ -153,12 +144,10 @@ export default function App() {
     setImages([]);
   };
 
-  // Update PDF settings
   const handleUpdateSettings = (partial: Partial<PdfSettings>) => {
     setSettings((prev) => ({ ...prev, ...partial }));
   };
 
-  // Generate PDF from selected images
   const handleCreatePdf = async () => {
     if (images.length === 0) {
       showToast('Please select at least one image to create a PDF.', 'error');
@@ -187,7 +176,6 @@ export default function App() {
         });
       });
 
-      // Complete progress
       setProgress((prev) => ({ ...prev, percentage: 100 }));
       await new Promise((r) => setTimeout(r, 150));
 
@@ -201,14 +189,6 @@ export default function App() {
       });
 
       setSuccessResult(result);
-
-      // পিডিএফ সফলভাবে তৈরি হওয়ার পর নিশ্চিত ইন্টারস্টিশিয়াল বিজ্ঞাপন ট্রিগার
-      try {
-        showStartIoInterstitial();
-      } catch (adError) {
-        console.error('Ad display error:', adError);
-      }
-
     } catch (err: any) {
       console.error('PDF Generation Error:', err);
       setProgress({
@@ -223,14 +203,10 @@ export default function App() {
     }
   };
 
-  // Start fresh conversion
   const handleCreateAnother = () => {
     if (successResult?.url) {
       URL.revokeObjectURL(successResult.url);
     }
-    // Safe trigger for native interstitial on natural flow completion
-    showStartIoInterstitial();
-
     setSuccessResult(null);
     handleClearAll();
     setSettings({
@@ -247,8 +223,7 @@ export default function App() {
   const totalSizeFormatted = formatFileSize(totalSizeBytes);
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-gray-900 font-sans antialiased selection:bg-blue-100">
-      {/* App Header */}
+    <div className="min-h-screen flex flex-col bg-[#F8FAFC] text-gray-900 font-sans antialiased selection:bg-blue-100 pb-20">
       <Header
         imageCount={images.length}
         onClearAll={images.length > 0 && !successResult ? handleClearAll : undefined}
@@ -263,9 +238,7 @@ export default function App() {
         onOpenAbout={() => handleOpenAbout('about')}
       />
 
-      {/* Main Screen Container */}
       <main className="flex-1 w-full max-w-xl mx-auto p-4 sm:p-5 flex flex-col justify-start">
-        {/* Toast Notification Banner */}
         {toastMessage && (
           <div
             id="app-toast-banner"
@@ -294,18 +267,14 @@ export default function App() {
           </div>
         )}
 
-        {/* View Switching */}
         {successResult ? (
-          /* Success Screen */
           <SuccessScreen result={successResult} onCreateAnother={handleCreateAnother} />
         ) : images.length === 0 ? (
-          /* Clean Empty State */
           <EmptyState
             onFilesSelected={handleAddFiles}
             onNotice={(msg) => showToast(msg, 'info')}
           />
         ) : (
-          /* List of Selected Images */
           <ImageGrid
             images={images}
             totalSizeFormatted={totalSizeFormatted}
@@ -322,10 +291,6 @@ export default function App() {
           />
         )}
 
-        {/* Dedicated Start.io Non-Intrusive Banner Area */}
-        <StartIoBanner isVisible={!successResult} />
-
-        {/* Subtle Footer with Privacy Policy & About Links */}
         <footer className="mt-8 mb-4 pt-4 border-t border-gray-100 flex flex-wrap items-center justify-between text-[11px] text-gray-400 gap-2">
           <span>Fast PDF • 100% On-Device</span>
           <div className="flex items-center gap-3">
@@ -356,9 +321,8 @@ export default function App() {
         </footer>
       </main>
 
-      {/* Floating Bottom Action Bar when images are loaded */}
       {!successResult && images.length > 0 && (
-        <div className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 p-4 shadow-xl">
+        <div className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 p-4 shadow-xl mb-12">
           <div className="max-w-xl mx-auto flex items-center justify-between gap-3">
             <button
               id="btn-create-pdf"
@@ -375,7 +339,6 @@ export default function App() {
         </div>
       )}
 
-      {/* PDF Settings Modal */}
       <PdfOptionsModal
         isOpen={isOptionsOpen}
         settings={settings}
@@ -383,10 +346,8 @@ export default function App() {
         onUpdateSettings={handleUpdateSettings}
       />
 
-      {/* PDF Conversion Progress Modal */}
       <ProgressModal progress={progress} />
 
-      {/* About & Privacy Policy Modal */}
       <AboutModal
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}
@@ -394,4 +355,5 @@ export default function App() {
       />
     </div>
   );
-}
+  }
+      
