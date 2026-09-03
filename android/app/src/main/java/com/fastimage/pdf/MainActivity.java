@@ -65,135 +65,139 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 1. Initialize Start.io Android SDK with official App ID and disable return ads
         try {
-            StartAppSDK.init(this, STARTIO_APP_ID, false);
-            StartAppSDK.setTestAdsEnabled(true);
-            StartAppAd.disableSplash();
-        } catch (Throwable t) {
-            Log.e(TAG, "Start.io SDK init error: " + t.getMessage(), t);
-        }
-
-        // 2. Build Layout: Main WebView + Dedicated Bottom Banner Container
-        RelativeLayout rootLayout = new RelativeLayout(this);
-        rootLayout.setLayoutParams(new RelativeLayout.LayoutParams(
-                RelativeLayout.LayoutParams.MATCH_PARENT,
-                RelativeLayout.LayoutParams.MATCH_PARENT
-        ));
-
-        // Create Webview
-        webView = new WebView(this);
-        RelativeLayout.LayoutParams webViewParams = new RelativeLayout.LayoutParams(
-                RelativeLayout.LayoutParams.MATCH_PARENT,
-                RelativeLayout.LayoutParams.MATCH_PARENT
-        );
-        webView.setLayoutParams(webViewParams);
-        webView.setBackgroundColor(0xFFF8FAFC);
-
-        // Enable web contents debugging for troubleshooting
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            // 1. Initialize Start.io Android SDK with official App ID and disable return ads
             try {
-                WebView.setWebContentsDebuggingEnabled(true);
-            } catch (Throwable ignored) {}
-        }
-
-        WebSettings webSettings = webView.getSettings();
-        webSettings.setJavaScriptEnabled(true);
-        webSettings.setDomStorageEnabled(true);
-        webSettings.setAllowFileAccess(true);
-        webSettings.setAllowContentAccess(true);
-        webSettings.setAllowFileAccessFromFileURLs(true);
-        webSettings.setAllowUniversalAccessFromFileURLs(true);
-        webSettings.setDatabaseEnabled(true);
-        webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        webSettings.setUseWideViewPort(true);
-        webSettings.setLoadWithOverviewMode(true);
-        webSettings.setSupportZoom(false);
-        webSettings.setDisplayZoomControls(false);
-
-        // Register Android JavaScriptInterface Bridges
-        webView.addJavascriptInterface(new StartAppBridge(), "StartAppAndroid");
-        webView.addJavascriptInterface(new AndroidAppBridge(), "AndroidApp");
-
-        // Custom WebViewClient with logging and error reporting
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                Log.d(TAG, "Page loaded successfully: " + url);
+                StartAppSDK.init(this, STARTIO_APP_ID, false);
+                StartAppSDK.setTestAdsEnabled(true);
+                StartAppAd.disableSplash();
+            } catch (Throwable t) {
+                Log.e(TAG, "Start.io SDK init error: " + t.getMessage(), t);
             }
 
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                super.onReceivedError(view, request, error);
-                if (request != null && request.isForMainFrame()) {
-                    Log.e(TAG, "Main frame load error: " + error.toString());
-                }
-            }
-        });
+            // 2. Build Layout: Main WebView + Dedicated Bottom Banner Container
+            RelativeLayout rootLayout = new RelativeLayout(this);
+            rootLayout.setLayoutParams(new RelativeLayout.LayoutParams(
+                    RelativeLayout.LayoutParams.MATCH_PARENT,
+                    RelativeLayout.LayoutParams.MATCH_PARENT
+            ));
 
-        // WebChromeClient for console logging and HTML5 File Chooser with native Camera support
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
-                if (consoleMessage != null) {
-                    Log.d(TAG + "-JS", consoleMessage.message() + " -- From line "
-                            + consoleMessage.lineNumber() + " of "
-                            + consoleMessage.sourceId());
-                }
-                return true;
-            }
+            // Create Webview
+            webView = new WebView(this);
+            RelativeLayout.LayoutParams webViewParams = new RelativeLayout.LayoutParams(
+                    RelativeLayout.LayoutParams.MATCH_PARENT,
+                    RelativeLayout.LayoutParams.MATCH_PARENT
+            );
+            webView.setLayoutParams(webViewParams);
+            webView.setBackgroundColor(0xFFF8FAFC);
 
-            @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallbackParam, FileChooserParams fileChooserParams) {
+            // Enable web contents debugging for troubleshooting
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 try {
-                    if (filePathCallback != null) {
-                        try {
-                            filePathCallback.onReceiveValue(null);
-                        } catch (Throwable ignored) {}
-                        filePathCallback = null;
-                    }
-                    filePathCallback = filePathCallbackParam;
-
-                    // Check and request camera permission if capture is enabled and permission not yet granted
-                    if (fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
-                        if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                            pendingFileChooserParams = fileChooserParams;
-                            ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
-                            return true;
-                        }
-                    }
-
-                    launchFileChooser(fileChooserParams);
-                    return true;
-                } catch (Throwable t) {
-                    Log.e(TAG, "onShowFileChooser error: " + t.getMessage(), t);
-                    if (filePathCallbackParam != null) {
-                        try {
-                            filePathCallbackParam.onReceiveValue(null);
-                        } catch (Throwable ignored) {}
-                    }
-                    filePathCallback = null;
-                    return false;
-                }
+                    WebView.setWebContentsDebuggingEnabled(true);
+                } catch (Throwable ignored) {}
             }
-        });
 
-        // Create Banner Container at the bottom of the screen
-        bannerContainer = new FrameLayout(this);
-        RelativeLayout.LayoutParams bannerParams = new RelativeLayout.LayoutParams(
-                RelativeLayout.LayoutParams.MATCH_PARENT,
-                RelativeLayout.LayoutParams.WRAP_CONTENT
-        );
-        bannerParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
-        bannerContainer.setLayoutParams(bannerParams);
+            WebSettings webSettings = webView.getSettings();
+            webSettings.setJavaScriptEnabled(true);
+            webSettings.setDomStorageEnabled(true);
+            webSettings.setAllowFileAccess(true);
+            webSettings.setAllowContentAccess(true);
+            webSettings.setAllowFileAccessFromFileURLs(true);
+            webSettings.setAllowUniversalAccessFromFileURLs(true);
+            webSettings.setDatabaseEnabled(true);
+            webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
+            webSettings.setUseWideViewPort(true);
+            webSettings.setLoadWithOverviewMode(true);
+            webSettings.setSupportZoom(false);
+            webSettings.setDisplayZoomControls(false);
 
-        rootLayout.addView(webView);
-        rootLayout.addView(bannerContainer);
-        setContentView(rootLayout);
+            // Register Android JavaScriptInterface Bridges
+            webView.addJavascriptInterface(new StartAppBridge(), "StartAppAndroid");
+            webView.addJavascriptInterface(new AndroidAppBridge(), "AndroidApp");
 
-        // Load compiled React Single Page App directly from assets
-        webView.loadUrl("file:///android_asset/index.html");
+            // Custom WebViewClient with logging and error reporting
+            webView.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageFinished(WebView view, String url) {
+                    super.onPageFinished(view, url);
+                    Log.d(TAG, "Page loaded successfully: " + url);
+                }
+
+                @Override
+                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                    super.onReceivedError(view, request, error);
+                    if (request != null && request.isForMainFrame()) {
+                        Log.e(TAG, "Main frame load error: " + error.toString());
+                    }
+                }
+            });
+
+            // WebChromeClient for console logging and HTML5 File Chooser with native Camera support
+            webView.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+                    if (consoleMessage != null) {
+                        Log.d(TAG + "-JS", consoleMessage.message() + " -- From line "
+                                + consoleMessage.lineNumber() + " of "
+                                + consoleMessage.sourceId());
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallbackParam, FileChooserParams fileChooserParams) {
+                    try {
+                        if (filePathCallback != null) {
+                            try {
+                                filePathCallback.onReceiveValue(null);
+                            } catch (Throwable ignored) {}
+                            filePathCallback = null;
+                        }
+                        filePathCallback = filePathCallbackParam;
+
+                        // Check and request camera permission if capture is enabled and permission not yet granted
+                        if (fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
+                            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                                pendingFileChooserParams = fileChooserParams;
+                                ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
+                                return true;
+                            }
+                        }
+
+                        launchFileChooser(fileChooserParams);
+                        return true;
+                    } catch (Throwable t) {
+                        Log.e(TAG, "onShowFileChooser error: " + t.getMessage(), t);
+                        if (filePathCallbackParam != null) {
+                            try {
+                                filePathCallbackParam.onReceiveValue(null);
+                            } catch (Throwable ignored) {}
+                        }
+                        filePathCallback = null;
+                        return false;
+                    }
+                }
+            });
+
+            // Create Banner Container at the bottom of the screen
+            bannerContainer = new FrameLayout(this);
+            RelativeLayout.LayoutParams bannerParams = new RelativeLayout.LayoutParams(
+                    RelativeLayout.LayoutParams.MATCH_PARENT,
+                    RelativeLayout.LayoutParams.WRAP_CONTENT
+            );
+            bannerParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+            bannerContainer.setLayoutParams(bannerParams);
+
+            rootLayout.addView(webView);
+            rootLayout.addView(bannerContainer);
+            setContentView(rootLayout);
+
+            // Load compiled React Single Page App directly from assets
+            webView.loadUrl("file:///android_asset/index.html");
+        } catch (Throwable t) {
+            Log.e(TAG, "Fatal error during MainActivity onCreate: " + t.getMessage(), t);
+        }
     }
 
     /**
