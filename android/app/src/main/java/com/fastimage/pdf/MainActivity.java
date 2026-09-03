@@ -26,10 +26,7 @@ import android.widget.LinearLayout;
 import android.widget.Toast;
 
 import com.startapp.sdk.ads.banner.Banner;
-import com.startapp.sdk.adsbase.StartAppAd;
 import com.startapp.sdk.adsbase.StartAppSDK;
-import com.startapp.sdk.adsbase.adlisteners.AdEventListener;
-import com.startapp.sdk.adsbase.Ad;
 
 import java.io.OutputStream;
 
@@ -38,10 +35,6 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> uploadMessage;
     private final static int FILECHOOSER_RESULTCODE = 1;
-    private StartAppAd startAppAd;
-    private boolean isAdLoaded = false;
-    private long lastInterstitialTime = 0;
-    private static final long MIN_AD_INTERVAL_MS = 30000; // ৩০ সেকেন্ড ব্যবধান
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -54,22 +47,18 @@ public class MainActivity extends Activity {
             getWindow().setStatusBarColor(Color.WHITE);
         }
 
-        // Start.io ইনিশিয়ালাইজেশন
+        // Start.io SDK ইনিশিয়ালাইজেশন (অফিসিয়াল ও নিরাপদ)
         StartAppSDK.init(this, "207781120", false);
         StartAppSDK.enableReturnAds(false);
-        StartAppSDK.setTestAdsEnabled(false); // লাইভ নেটওয়ার্কের আসল রেন্ডারিং পেতে false রাখা হলো
 
-        startAppAd = new StartAppAd(this);
-        loadInterstitialSafely();
-
-        // মূল UI লেআউট
+        // রুট লেআউট
         LinearLayout rootLayout = new LinearLayout(this);
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // WebView অংশ
+        // WebView কন্টেইনার
         FrameLayout webViewContainer = new FrameLayout(this);
         LinearLayout.LayoutParams webViewParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -84,7 +73,7 @@ public class MainActivity extends Activity {
         webViewContainer.addView(webView);
         rootLayout.addView(webViewContainer);
 
-        // নিচের ব্যানার বিজ্ঞাপন
+        // স্ক্রিনের নিচে লাইভ ব্যানার অ্যাড
         FrameLayout bannerContainer = new FrameLayout(this);
         LinearLayout.LayoutParams bannerParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -102,7 +91,7 @@ public class MainActivity extends Activity {
 
         setContentView(rootLayout);
 
-        // WebView কনফিগারেশন
+        // ওয়েব সেটিংস
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -134,22 +123,6 @@ public class MainActivity extends Activity {
         });
 
         webView.loadUrl("file:///android_asset/index.html");
-    }
-
-    private void loadInterstitialSafely() {
-        if (startAppAd != null) {
-            startAppAd.loadAd(StartAppAd.AdMode.AUTOMATIC, new AdEventListener() {
-                @Override
-                public void onReceiveAd(Ad ad) {
-                    isAdLoaded = true;
-                }
-
-                @Override
-                public void onFailedToReceiveAd(Ad ad) {
-                    isAdLoaded = false;
-                }
-            });
-        }
     }
 
     class AndroidBridge {
@@ -199,24 +172,6 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(MainActivity.this, "Action Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
             }
         }
-
-        // নিরাপদ ইন্টারস্টিশিয়াল শো: কখনোই ব্ল্যাঙ্ক স্ক্রিন আসবে না
-        @JavascriptInterface
-        public void showInterstitial() {
-            runOnUiThread(() -> {
-                long now = System.currentTimeMillis();
-                if (now - lastInterstitialTime >= MIN_AD_INTERVAL_MS) {
-                    if (startAppAd != null && isAdLoaded && startAppAd.isReady()) {
-                        isAdLoaded = false;
-                        startAppAd.showAd();
-                        lastInterstitialTime = System.currentTimeMillis();
-                        loadInterstitialSafely(); // পরবর্তী সময়ের জন্য আবার লোড
-                    } else {
-                        loadInterstitialSafely();
-                    }
-                }
-            });
-        }
     }
 
     @Override
@@ -244,11 +199,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        // অ্যাপ যেন ফট করে বন্ধ না হয়ে যায়
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
             super.onBackPressed();
         }
-    }   
-}   
+    }
+}
+
