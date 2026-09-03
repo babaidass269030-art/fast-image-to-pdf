@@ -65,17 +65,16 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Global crash guard for uncaught background threads
         try {
-            // 1. Initialize Start.io Android SDK with official App ID and disable return ads
-            try {
-                StartAppSDK.init(this, STARTIO_APP_ID, false);
-                StartAppSDK.setTestAdsEnabled(true);
-                StartAppAd.disableSplash();
-            } catch (Throwable t) {
-                Log.e(TAG, "Start.io SDK init error: " + t.getMessage(), t);
-            }
+            Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+                Log.e(TAG, "Uncaught exception on thread " + (thread != null ? thread.getName() : "unknown")
+                        + ": " + (throwable != null ? throwable.getMessage() : "null"), throwable);
+            });
+        } catch (Throwable ignored) {}
 
-            // 2. Build Layout: Main WebView + Dedicated Bottom Banner Container
+        try {
+            // 1. Build and set Layout immediately so screen is never blank or dismissed
             RelativeLayout rootLayout = new RelativeLayout(this);
             rootLayout.setLayoutParams(new RelativeLayout.LayoutParams(
                     RelativeLayout.LayoutParams.MATCH_PARENT,
@@ -91,30 +90,51 @@ public class MainActivity extends AppCompatActivity {
             webView.setLayoutParams(webViewParams);
             webView.setBackgroundColor(0xFFF8FAFC);
 
-            // Enable web contents debugging for troubleshooting
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                try {
+            // Create Banner Container at the bottom of the screen
+            bannerContainer = new FrameLayout(this);
+            RelativeLayout.LayoutParams bannerParams = new RelativeLayout.LayoutParams(
+                    RelativeLayout.LayoutParams.MATCH_PARENT,
+                    RelativeLayout.LayoutParams.WRAP_CONTENT
+            );
+            bannerParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+            bannerContainer.setLayoutParams(bannerParams);
+
+            rootLayout.addView(webView);
+            rootLayout.addView(bannerContainer);
+            setContentView(rootLayout);
+
+            // 2. Configure WebView Settings safely
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                     WebView.setWebContentsDebuggingEnabled(true);
-                } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+
+            try {
+                WebSettings webSettings = webView.getSettings();
+                webSettings.setJavaScriptEnabled(true);
+                webSettings.setDomStorageEnabled(true);
+                webSettings.setAllowFileAccess(true);
+                webSettings.setAllowContentAccess(true);
+                webSettings.setAllowFileAccessFromFileURLs(true);
+                webSettings.setAllowUniversalAccessFromFileURLs(true);
+                webSettings.setDatabaseEnabled(true);
+                webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                webSettings.setUseWideViewPort(true);
+                webSettings.setLoadWithOverviewMode(true);
+                webSettings.setSupportZoom(false);
+                webSettings.setDisplayZoomControls(false);
+            } catch (Throwable t) {
+                Log.e(TAG, "WebSettings config error: " + t.getMessage(), t);
             }
 
-            WebSettings webSettings = webView.getSettings();
-            webSettings.setJavaScriptEnabled(true);
-            webSettings.setDomStorageEnabled(true);
-            webSettings.setAllowFileAccess(true);
-            webSettings.setAllowContentAccess(true);
-            webSettings.setAllowFileAccessFromFileURLs(true);
-            webSettings.setAllowUniversalAccessFromFileURLs(true);
-            webSettings.setDatabaseEnabled(true);
-            webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
-            webSettings.setUseWideViewPort(true);
-            webSettings.setLoadWithOverviewMode(true);
-            webSettings.setSupportZoom(false);
-            webSettings.setDisplayZoomControls(false);
-
             // Register Android JavaScriptInterface Bridges
-            webView.addJavascriptInterface(new StartAppBridge(), "StartAppAndroid");
-            webView.addJavascriptInterface(new AndroidAppBridge(), "AndroidApp");
+            try {
+                webView.addJavascriptInterface(new StartAppBridge(), "StartAppAndroid");
+                webView.addJavascriptInterface(new AndroidAppBridge(), "AndroidApp");
+            } catch (Throwable t) {
+                Log.e(TAG, "JavaScriptInterface registration error: " + t.getMessage(), t);
+            }
 
             // Custom WebViewClient with logging and error reporting
             webView.setWebViewClient(new WebViewClient() {
@@ -156,7 +176,6 @@ public class MainActivity extends AppCompatActivity {
                         }
                         filePathCallback = filePathCallbackParam;
 
-                        // Check and request camera permission if capture is enabled and permission not yet granted
                         if (fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
                             if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                                 pendingFileChooserParams = fileChooserParams;
@@ -180,21 +199,18 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
 
-            // Create Banner Container at the bottom of the screen
-            bannerContainer = new FrameLayout(this);
-            RelativeLayout.LayoutParams bannerParams = new RelativeLayout.LayoutParams(
-                    RelativeLayout.LayoutParams.MATCH_PARENT,
-                    RelativeLayout.LayoutParams.WRAP_CONTENT
-            );
-            bannerParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
-            bannerContainer.setLayoutParams(bannerParams);
-
-            rootLayout.addView(webView);
-            rootLayout.addView(bannerContainer);
-            setContentView(rootLayout);
-
-            // Load compiled React Single Page App directly from assets
+            // 3. Load React App from Assets
             webView.loadUrl("file:///android_asset/index.html");
+
+            // 4. Initialize Start.io Android SDK in isolated guard after view is initialized
+            try {
+                StartAppSDK.init(this, STARTIO_APP_ID, false);
+                StartAppSDK.setTestAdsEnabled(true);
+                StartAppAd.disableSplash();
+            } catch (Throwable t) {
+                Log.e(TAG, "Start.io SDK init error (safe skip): " + t.getMessage(), t);
+            }
+
         } catch (Throwable t) {
             Log.e(TAG, "Fatal error during MainActivity onCreate: " + t.getMessage(), t);
         }
@@ -536,6 +552,43 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (webView != null) {
+            try {
+                webView.onPause();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            try {
+                webView.onResume();
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        try {
+            if (bannerContainer != null) {
+                bannerContainer.removeAllViews();
+            }
+            if (startIoBanner != null) {
+                startIoBanner = null;
+            }
+            if (webView != null) {
+                webView.destroy();
+                webView = null;
+            }
+        } catch (Throwable ignored) {}
+        super.onDestroy();
     }
 
     @Override
