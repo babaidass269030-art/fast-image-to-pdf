@@ -28,6 +28,8 @@ import android.widget.Toast;
 import com.startapp.sdk.ads.banner.Banner;
 import com.startapp.sdk.adsbase.StartAppAd;
 import com.startapp.sdk.adsbase.StartAppSDK;
+import com.startapp.sdk.adsbase.adlisteners.AdDisplayListener;
+import com.startapp.sdk.adsbase.Ad;
 
 import java.io.OutputStream;
 
@@ -38,7 +40,7 @@ public class MainActivity extends Activity {
     private final static int FILECHOOSER_RESULTCODE = 1;
     private StartAppAd startAppAd;
     private long lastInterstitialTime = 0;
-    private static final long MIN_AD_INTERVAL_MS = 60000; // ন্যূনতম ১ মিনিটের ব্যবধান
+    private static final long MIN_AD_INTERVAL_MS = 45000; // ৪৫ সেকেন্ড ব্যবধান
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -51,19 +53,24 @@ public class MainActivity extends Activity {
             getWindow().setStatusBarColor(Color.WHITE);
         }
 
-        // Start.io SDK ইনিশিয়ালাইজেশন (App ID: 207781120)
+        // Start.io SDK ইনিশিয়ালাইজেশন
+        // টেস্টের সময় নিরাপদ রাখতে এবং ব্যান প্রতিরোধে টেস্ট মোড সাপোর্টেড কনফিগারেশন
         StartAppSDK.init(this, "207781120", false);
-        StartAppSDK.enableReturnAds(false); // অ্যাপ মিনিমাইজ করে ফিরলে বিরক্তি এড়াতে অ্যাড বন্ধ
-        startAppAd = new StartAppAd(this);
+        StartAppSDK.enableReturnAds(false);
+        StartAppSDK.setTestAdsEnabled(true); // টেস্টিংয়ের সময় সেফ থাকার জন্য টেস্ট অ্যাড অন রাখা হলো
 
-        // মূল লেআউট তৈরি
+        startAppAd = new StartAppAd(this);
+        // ব্যাকগ্রাউন্ডে ইন্টারস্টিশিয়াল অ্যাড আগে থেকেই লোড করে রাখা
+        startAppAd.loadAd();
+
+        // মূল লেআউট
         LinearLayout rootLayout = new LinearLayout(this);
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // WebView কন্টেইনার
+        // WebView অংশ
         FrameLayout webViewContainer = new FrameLayout(this);
         LinearLayout.LayoutParams webViewParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -96,7 +103,7 @@ public class MainActivity extends Activity {
 
         setContentView(rootLayout);
 
-        // WebView সেটিংস
+        // ওয়েবভিউ কনফিগারেশন
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -178,18 +185,36 @@ public class MainActivity extends Activity {
             }
         }
 
-        // React-এর handleCreateAnother থেকে কল হলে নন-ইনট্রুসিভ অ্যাড ট্রিগার
+        // নিরাপদ ইন্টারস্টিশিয়াল প্রদর্শন — স্ক্রিন সাদা হওয়ার ঝামেলা ছাড়া
         @JavascriptInterface
         public void showInterstitial() {
-            long now = System.currentTimeMillis();
-            if (now - lastInterstitialTime >= MIN_AD_INTERVAL_MS) {
-                runOnUiThread(() -> {
-                    if (startAppAd != null) {
-                        startAppAd.showAd();
-                        lastInterstitialTime = System.currentTimeMillis();
+            runOnUiThread(() -> {
+                long now = System.currentTimeMillis();
+                if (now - lastInterstitialTime >= MIN_AD_INTERVAL_MS) {
+                    if (startAppAd != null && startAppAd.isReady()) {
+                        startAppAd.showAd(new AdDisplayListener() {
+                            @Override
+                            public void adHidden(Ad ad) {
+                                // অ্যাড বন্ধ হলে পরবর্তী অ্যাডের জন্য আগে থেকেই ফেচ করে রাখা
+                                startAppAd.loadAd();
+                            }
+                            @Override
+                            public void adDisplayed(Ad ad) {
+                                lastInterstitialTime = System.currentTimeMillis();
+                            }
+                            @Override
+                            public void adClicked(Ad ad) {}
+                            @Override
+                            public void adNotDisplayed(Ad ad) {
+                                startAppAd.loadAd();
+                            }
+                        });
+                    } else if (startAppAd != null) {
+                        // যদি আগে থেকে অ্যাড রেডি না থাকে, ব্যাকগ্রাউন্ডে ফেচ হবে কিন্তু স্ক্রিন আটকে রাখবে না
+                        startAppAd.loadAd();
                     }
-                });
-            }
+                }
+            });
         }
     }
 
@@ -224,4 +249,4 @@ public class MainActivity extends Activity {
             super.onBackPressed();
         }
     }
-}
+    }
