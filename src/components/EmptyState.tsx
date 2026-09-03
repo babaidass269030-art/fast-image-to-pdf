@@ -39,8 +39,36 @@ export const EmptyState: React.FC<{ onFilesSelected: (files: FileList | File[]) 
         </div>
       </div>
 
-      <input type="file" ref={fileInputRef} onChange={(e) => e.target.files && onFilesSelected(e.target.files)} accept="image/*" multiple className="hidden" />
-      <input type="file" ref={cameraInputRef} onChange={(e) => e.target.files && onFilesSelected(e.target.files)} accept="image/*" capture="environment" className="hidden" />
+      <input
+        id="empty-state-file-input"
+        type="file"
+        ref={fileInputRef}
+        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            onFilesSelected(e.target.files);
+          }
+          e.target.value = '';
+        }}
+        accept="image/*"
+        multiple
+        className="hidden"
+      />
+      <input
+        id="empty-state-camera-input"
+        type="file"
+        ref={cameraInputRef}
+        onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            onFilesSelected(e.target.files);
+          }
+          e.target.value = '';
+        }}
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+      />
     </div>
   );
 };

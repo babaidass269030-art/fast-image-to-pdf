@@ -2,8 +2,10 @@ package com.fastimage.pdf;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
@@ -41,9 +43,11 @@ import com.startapp.sdk.ads.banner.BannerListener;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
+import java.io.OutputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
@@ -58,6 +62,7 @@ public class MainActivity extends AppCompatActivity {
     private Banner startIoBanner;
     private ValueCallback<Uri[]> filePathCallback;
     private Uri cameraPhotoUri;
+    private File tempCameraFile;
     private WebChromeClient.FileChooserParams pendingFileChooserParams;
 
     @Override
@@ -101,6 +106,7 @@ public class MainActivity extends AppCompatActivity {
 
             rootLayout.addView(webView);
             rootLayout.addView(bannerContainer);
+            bannerContainer.bringToFront();
             setContentView(rootLayout);
 
             // 2. Configure WebView Settings safely
@@ -131,6 +137,7 @@ public class MainActivity extends AppCompatActivity {
             // Register Android JavaScriptInterface Bridges
             try {
                 webView.addJavascriptInterface(new StartAppBridge(), "StartAppAndroid");
+                webView.addJavascriptInterface(new StartAppBridge(), "StartApp");
                 webView.addJavascriptInterface(new AndroidAppBridge(), "AndroidApp");
             } catch (Throwable t) {
                 Log.e(TAG, "JavaScriptInterface registration error: " + t.getMessage(), t);
@@ -202,14 +209,8 @@ public class MainActivity extends AppCompatActivity {
             // 3. Load React App from Assets
             webView.loadUrl("file:///android_asset/index.html");
 
-            // 4. Initialize Start.io Android SDK in isolated guard after view is initialized
-            try {
-                StartAppSDK.init(this, STARTIO_APP_ID, false);
-                StartAppSDK.setTestAdsEnabled(true);
-                StartAppAd.disableSplash();
-            } catch (Throwable t) {
-                Log.e(TAG, "Start.io SDK init error (safe skip): " + t.getMessage(), t);
-            }
+            // 4. Initialize Start.io Android SDK and load banner
+            initAndShowStartIoAds();
 
         } catch (Throwable t) {
             Log.e(TAG, "Fatal error during MainActivity onCreate: " + t.getMessage(), t);
@@ -217,12 +218,28 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Initialize Start.io SDK and display banner ad
+     */
+    private void initAndShowStartIoAds() {
+        runOnUiThread(() -> {
+            try {
+                StartAppSDK.init(this, STARTIO_APP_ID, false);
+                StartAppSDK.setTestAdsEnabled(true);
+                StartAppAd.disableSplash();
+                loadAndShowBanner();
+            } catch (Throwable t) {
+                Log.e(TAG, "Start.io init error: " + t.getMessage(), t);
+            }
+        });
+    }
+
+    /**
      * Create a temporary file Uri for Camera capture via FileProvider
      */
-    private Uri createCameraImageUri() {
+    private Intent createCameraIntent() {
         try {
             String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-            String imageFileName = "JPEG_" + timeStamp + "_";
+            String imageFileName = "IMG_" + timeStamp + "_";
             File storageDir = getExternalCacheDir();
             if (storageDir == null) {
                 storageDir = getCacheDir();
@@ -230,11 +247,19 @@ public class MainActivity extends AppCompatActivity {
             if (storageDir != null && !storageDir.exists()) {
                 storageDir.mkdirs();
             }
-            File imageFile = File.createTempFile(imageFileName, ".jpg", storageDir);
+            tempCameraFile = File.createTempFile(imageFileName, ".jpg", storageDir);
             String authority = getPackageName() + ".fileprovider";
-            return FileProvider.getUriForFile(this, authority, imageFile);
+            cameraPhotoUri = FileProvider.getUriForFile(this, authority, tempCameraFile);
+
+            Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            takePictureIntent.setClipData(ClipData.newRawUri("Camera", cameraPhotoUri));
+            return takePictureIntent;
         } catch (Throwable t) {
-            Log.e(TAG, "Failed to create temp camera file with FileProvider: " + t.getMessage(), t);
+            Log.w(TAG, "Failed to create camera intent: " + t.getMessage(), t);
+            tempCameraFile = null;
+            cameraPhotoUri = null;
             return null;
         }
     }
@@ -245,48 +270,35 @@ public class MainActivity extends AppCompatActivity {
     private void launchFileChooser(WebChromeClient.FileChooserParams fileChooserParams) {
         try {
             boolean isCapture = fileChooserParams != null && fileChooserParams.isCaptureEnabled();
-            Intent takePictureIntent = null;
-            cameraPhotoUri = createCameraImageUri();
 
-            if (cameraPhotoUri != null) {
-                takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-                takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                takePictureIntent.setClipData(ClipData.newRawUri("Camera", cameraPhotoUri));
-            }
-
-            if (isCapture && takePictureIntent != null) {
-                // "Take Photo" button with capture="environment" -> Direct camera trigger
-                try {
-                    startActivityForResult(takePictureIntent, FILE_CHOOSER_RESULT_CODE);
-                    return;
-                } catch (Throwable e) {
-                    Log.w(TAG, "Direct camera launch failed, falling back to chooser: " + e.getMessage());
+            // Direct Camera Trigger when capture="environment" is set
+            if (isCapture) {
+                Intent takePictureIntent = createCameraIntent();
+                if (takePictureIntent != null) {
+                    try {
+                        startActivityForResult(takePictureIntent, FILE_CHOOSER_RESULT_CODE);
+                        return;
+                    } catch (Throwable e) {
+                        Log.w(TAG, "Direct camera launch failed, falling back: " + e.getMessage());
+                    }
                 }
             }
 
-            // Standard gallery/photo selection with camera as an additional option
-            Intent contentSelectionIntent = null;
-            if (fileChooserParams != null) {
-                try {
-                    contentSelectionIntent = fileChooserParams.createIntent();
-                } catch (Throwable t) {
-                    Log.w(TAG, "fileChooserParams.createIntent() failed: " + t.getMessage());
-                }
-            }
+            // Gallery / File selection intent supporting multiple photos
+            Intent galleryIntent = new Intent(Intent.ACTION_GET_CONTENT);
+            galleryIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            galleryIntent.setType("image/*");
+            galleryIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            galleryIntent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                    "image/jpeg", "image/png", "image/webp", "image/bmp", "image/gif", "image/*"
+            });
 
-            if (contentSelectionIntent == null) {
-                contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
-                contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
-                contentSelectionIntent.setType("image/*");
-            }
+            Intent chooserIntent = Intent.createChooser(galleryIntent, "Select Images");
 
-            Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
-            chooserIntent.putExtra(Intent.EXTRA_INTENT, contentSelectionIntent);
-            chooserIntent.putExtra(Intent.EXTRA_TITLE, "Select Images");
-
-            if (takePictureIntent != null) {
-                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{takePictureIntent});
+            // Include camera option in the chooser
+            Intent cameraOptionIntent = createCameraIntent();
+            if (cameraOptionIntent != null) {
+                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraOptionIntent});
             }
 
             startActivityForResult(chooserIntent, FILE_CHOOSER_RESULT_CODE);
@@ -298,7 +310,6 @@ public class MainActivity extends AppCompatActivity {
                 } catch (Throwable ignored) {}
                 filePathCallback = null;
             }
-            cameraPhotoUri = null;
             Toast.makeText(MainActivity.this, "Unable to open image picker", Toast.LENGTH_SHORT).show();
         }
     }
@@ -322,37 +333,78 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_CHOOSER_RESULT_CODE) {
             if (filePathCallback != null) {
+                Uri[] results = null;
                 try {
-                    Uri[] results = null;
-                    if (resultCode == RESULT_OK) {
-                        if (data == null || (data.getData() == null && data.getClipData() == null)) {
-                            // Camera capture saved directly into cameraPhotoUri
-                            if (cameraPhotoUri != null) {
-                                results = new Uri[]{cameraPhotoUri};
-                            }
-                        } else {
-                            try {
-                                results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-                            } catch (Throwable t) {
-                                Log.w(TAG, "parseResult failed: " + t.getMessage());
-                            }
-                            if (results == null && data.getData() != null) {
-                                results = new Uri[]{data.getData()};
-                            }
-                            if (results == null && cameraPhotoUri != null) {
-                                results = new Uri[]{cameraPhotoUri};
+                    if (resultCode == Activity.RESULT_OK) {
+                        List<Uri> uriList = new ArrayList<>();
+
+                        // Check if camera captured an image
+                        boolean isCameraCapture = false;
+                        if (tempCameraFile != null && tempCameraFile.exists() && tempCameraFile.length() > 0) {
+                            if (data == null || (data.getData() == null && data.getClipData() == null)) {
+                                isCameraCapture = true;
+                                if (cameraPhotoUri != null) {
+                                    uriList.add(cameraPhotoUri);
+                                }
                             }
                         }
+
+                        // Process gallery / file picker results
+                        if (!isCameraCapture && data != null) {
+                            // 1. Multiple files selected (ClipData)
+                            if (data.getClipData() != null) {
+                                ClipData clipData = data.getClipData();
+                                int count = clipData.getItemCount();
+                                for (int i = 0; i < count; i++) {
+                                    Uri itemUri = clipData.getItemAt(i).getUri();
+                                    if (itemUri != null) {
+                                        uriList.add(itemUri);
+                                    }
+                                }
+                            }
+
+                            // 2. Single file selected (data.getData())
+                            if (uriList.isEmpty() && data.getData() != null) {
+                                uriList.add(data.getData());
+                            }
+
+                            // 3. Fallback to parseResult
+                            if (uriList.isEmpty()) {
+                                try {
+                                    Uri[] parsed = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                                    if (parsed != null && parsed.length > 0) {
+                                        for (Uri u : parsed) {
+                                            if (u != null) uriList.add(u);
+                                        }
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
+                        }
+
+                        // Fallback to camera URI if nothing else was retrieved and camera file has bytes
+                        if (uriList.isEmpty() && cameraPhotoUri != null && tempCameraFile != null && tempCameraFile.exists() && tempCameraFile.length() > 0) {
+                            uriList.add(cameraPhotoUri);
+                        }
+
+                        if (!uriList.isEmpty()) {
+                            results = uriList.toArray(new Uri[0]);
+                        }
                     }
-                    filePathCallback.onReceiveValue(results);
                 } catch (Throwable t) {
                     Log.e(TAG, "Error processing file chooser result: " + t.getMessage(), t);
-                    try {
-                        filePathCallback.onReceiveValue(null);
-                    } catch (Throwable ignored) {}
                 } finally {
-                    filePathCallback = null;
+                    // Clean up 0-byte temporary camera file if camera was not used
+                    try {
+                        if (tempCameraFile != null && tempCameraFile.exists() && tempCameraFile.length() == 0) {
+                            tempCameraFile.delete();
+                        }
+                    } catch (Throwable ignored) {}
+                    tempCameraFile = null;
                     cameraPhotoUri = null;
+
+                    // Always notify callback to avoid WebView file chooser freeze
+                    filePathCallback.onReceiveValue(results);
+                    filePathCallback = null;
                 }
             }
         } else {
@@ -361,7 +413,51 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Native JavaScript Interface for PDF Actions (Download, Open, Share)
+     * Loads and displays Start.io bottom banner safely
+     */
+    private void loadAndShowBanner() {
+        runOnUiThread(() -> {
+            try {
+                if (bannerContainer == null) return;
+                if (startIoBanner == null) {
+                    startIoBanner = new Banner(MainActivity.this, new BannerListener() {
+                        @Override
+                        public void onReceiveAd(View banner) {
+                            Log.d(TAG, "Start.io banner ad received successfully");
+                            if (bannerContainer != null) {
+                                bannerContainer.setVisibility(View.VISIBLE);
+                                bannerContainer.bringToFront();
+                            }
+                        }
+
+                        @Override
+                        public void onFailedToReceiveAd(View banner) {
+                            Log.w(TAG, "Start.io banner ad failed to receive ad");
+                        }
+
+                        @Override
+                        public void onClick(View banner) {}
+
+                        @Override
+                        public void onImpression(View banner) {}
+                    });
+
+                    bannerContainer.removeAllViews();
+                    bannerContainer.addView(startIoBanner);
+                }
+                bannerContainer.setVisibility(View.VISIBLE);
+                bannerContainer.bringToFront();
+                if (startIoBanner != null) {
+                    startIoBanner.showBanner();
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "Error displaying Start.io banner: " + t.getMessage(), t);
+            }
+        });
+    }
+
+    /**
+     * Native JavaScript Interface for PDF Actions (Download, Open, Share) and Ads
      */
     public class AndroidAppBridge {
 
@@ -377,6 +473,9 @@ public class MainActivity extends AppCompatActivity {
                     if (safeFilename == null || safeFilename.trim().isEmpty()) {
                         safeFilename = "FastPDF_" + System.currentTimeMillis() + ".pdf";
                     }
+                    if (!safeFilename.toLowerCase().endsWith(".pdf")) {
+                        safeFilename = safeFilename + ".pdf";
+                    }
 
                     byte[] pdfBytes;
                     try {
@@ -387,32 +486,59 @@ public class MainActivity extends AppCompatActivity {
                         return;
                     }
 
-                    File docsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
-                    if (docsDir == null) {
-                        docsDir = getFilesDir();
-                    }
-                    File pdfDir = new File(docsDir, "FastPDF");
-                    if (!pdfDir.exists()) {
-                        pdfDir.mkdirs();
-                    }
-                    File pdfFile = new File(pdfDir, safeFilename);
-
-                    try (FileOutputStream fos = new FileOutputStream(pdfFile)) {
+                    // 1. Save to Internal Cache for FileProvider Sharing / Opening
+                    File cachePdfFile = new File(getCacheDir(), safeFilename);
+                    try (FileOutputStream fos = new FileOutputStream(cachePdfFile)) {
                         fos.write(pdfBytes);
                         fos.flush();
                     }
 
                     String authority = getPackageName() + ".fileprovider";
-                    Uri fileUri;
+                    Uri fileUri = FileProvider.getUriForFile(MainActivity.this, authority, cachePdfFile);
+
+                    // 2. Save directly to public Downloads folder for user accessibility
+                    boolean savedToPublicDownloads = false;
                     try {
-                        fileUri = FileProvider.getUriForFile(MainActivity.this, authority, pdfFile);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            ContentValues values = new ContentValues();
+                            values.put(MediaStore.Downloads.DISPLAY_NAME, safeFilename);
+                            values.put(MediaStore.Downloads.MIME_TYPE, "application/pdf");
+                            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/FastPDF");
+                            values.put(MediaStore.Downloads.IS_PENDING, 1);
+
+                            Uri downloadCollection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+                            Uri publicDownloadUri = getContentResolver().insert(downloadCollection, values);
+                            if (publicDownloadUri != null) {
+                                try (OutputStream os = getContentResolver().openOutputStream(publicDownloadUri)) {
+                                    if (os != null) {
+                                        os.write(pdfBytes);
+                                        os.flush();
+                                    }
+                                }
+                                values.clear();
+                                values.put(MediaStore.Downloads.IS_PENDING, 0);
+                                getContentResolver().update(publicDownloadUri, values, null, null);
+                                savedToPublicDownloads = true;
+                            }
+                        } else {
+                            File publicDownloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                            File fastPdfFolder = new File(publicDownloadsDir, "FastPDF");
+                            if (!fastPdfFolder.exists()) {
+                                fastPdfFolder.mkdirs();
+                            }
+                            File publicFile = new File(fastPdfFolder, safeFilename);
+                            try (FileOutputStream fos = new FileOutputStream(publicFile)) {
+                                fos.write(pdfBytes);
+                                fos.flush();
+                                savedToPublicDownloads = true;
+                            }
+                            MediaScannerConnection.scanFile(MainActivity.this, new String[]{publicFile.getAbsolutePath()}, new String[]{"application/pdf"}, null);
+                        }
                     } catch (Throwable t) {
-                        Log.e(TAG, "FileProvider getUriForFile failed: " + t.getMessage(), t);
-                        Toast.makeText(MainActivity.this, "Error preparing PDF: " + t.getMessage(), Toast.LENGTH_LONG).show();
-                        return;
+                        Log.w(TAG, "Public downloads write failed, falling back to app files: " + t.getMessage());
                     }
 
-                    if ("share".equals(action)) {
+                    if ("share".equalsIgnoreCase(action)) {
                         try {
                             Intent shareIntent = new Intent(Intent.ACTION_SEND);
                             shareIntent.setType("application/pdf");
@@ -421,17 +547,15 @@ public class MainActivity extends AppCompatActivity {
                             shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
                             Intent chooser = Intent.createChooser(shareIntent, "Share PDF");
-                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
                             startActivity(chooser);
                         } catch (ActivityNotFoundException e) {
-                            Log.e(TAG, "No app available to share PDF: " + e.getMessage());
                             Toast.makeText(MainActivity.this, "No app found to share PDF", Toast.LENGTH_SHORT).show();
                         } catch (Throwable t) {
                             Log.e(TAG, "Failed to share PDF: " + t.getMessage(), t);
                             Toast.makeText(MainActivity.this, "Could not share PDF", Toast.LENGTH_SHORT).show();
                         }
-                    } else if ("open".equals(action)) {
+                    } else if ("open".equalsIgnoreCase(action)) {
                         try {
                             Intent openIntent = new Intent(Intent.ACTION_VIEW);
                             openIntent.setDataAndType(fileUri, "application/pdf");
@@ -439,20 +563,30 @@ public class MainActivity extends AppCompatActivity {
                             openIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
 
                             Intent chooser = Intent.createChooser(openIntent, "Open PDF");
-                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
                             startActivity(chooser);
                         } catch (ActivityNotFoundException e) {
-                            Log.e(TAG, "No app available to open PDF: " + e.getMessage());
                             Toast.makeText(MainActivity.this, "No PDF viewer app installed", Toast.LENGTH_LONG).show();
                         } catch (Throwable t) {
                             Log.e(TAG, "Failed to open PDF: " + t.getMessage(), t);
                             Toast.makeText(MainActivity.this, "Could not open PDF", Toast.LENGTH_SHORT).show();
                         }
                     } else {
-                        Toast.makeText(MainActivity.this, "Saved: " + pdfFile.getName(), Toast.LENGTH_SHORT).show();
+                        // Download / Save Action
+                        String msg = savedToPublicDownloads
+                                ? "Saved to Downloads/FastPDF: " + safeFilename
+                                : "Saved: " + safeFilename;
+                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+
+                        // Offer user to open the downloaded file immediately
                         try {
-                            MediaScannerConnection.scanFile(MainActivity.this, new String[]{pdfFile.getAbsolutePath()}, new String[]{"application/pdf"}, null);
+                            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+                            viewIntent.setDataAndType(fileUri, "application/pdf");
+                            viewIntent.setClipData(ClipData.newRawUri("PDF", fileUri));
+                            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                            Intent chooser = Intent.createChooser(viewIntent, "Open " + safeFilename);
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(chooser);
                         } catch (Throwable ignored) {}
                     }
                 } catch (Throwable t) {
@@ -461,10 +595,40 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
+
+        @JavascriptInterface
+        public void showInterstitial() {
+            runOnUiThread(() -> {
+                try {
+                    StartAppAd.showAd(MainActivity.this);
+                } catch (Throwable t) {
+                    Log.e(TAG, "StartAppAd showAd error: " + t.getMessage());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void showBanner(String position) {
+            loadAndShowBanner();
+        }
+
+        @JavascriptInterface
+        public void hideBanner() {
+            runOnUiThread(() -> {
+                try {
+                    if (bannerContainer != null) {
+                        bannerContainer.setVisibility(View.GONE);
+                    }
+                    if (startIoBanner != null) {
+                        startIoBanner.hideBanner();
+                    }
+                } catch (Throwable ignored) {}
+            });
+        }
     }
 
     /**
-     * Native JavaScript Interface exposed to React Web Application for Start.io Ads
+     * Native JavaScript Interface exposed for Start.io Ads
      */
     public class StartAppBridge {
 
@@ -478,6 +642,7 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 try {
                     StartAppSDK.setTestAdsEnabled(testMode);
+                    loadAndShowBanner();
                 } catch (Throwable t) {
                     Log.e(TAG, "StartAppSDK setTestAdsEnabled error: " + t.getMessage());
                 }
@@ -486,44 +651,7 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public void showBanner(String position) {
-            runOnUiThread(() -> {
-                try {
-                    if (bannerContainer == null) return;
-                    if (startIoBanner == null) {
-                        startIoBanner = new Banner(MainActivity.this, new BannerListener() {
-                            @Override
-                            public void onReceiveAd(View banner) {
-                                if (bannerContainer != null) {
-                                    bannerContainer.setVisibility(View.VISIBLE);
-                                }
-                            }
-
-                            @Override
-                            public void onFailedToReceiveAd(View banner) {
-                                if (bannerContainer != null) {
-                                    bannerContainer.setVisibility(View.GONE);
-                                }
-                            }
-
-                            @Override
-                            public void onClick(View banner) {
-                            }
-
-                            @Override
-                            public void onImpression(View banner) {
-                            }
-                        });
-
-                        bannerContainer.removeAllViews();
-                        bannerContainer.addView(startIoBanner);
-                    } else {
-                        bannerContainer.setVisibility(View.VISIBLE);
-                        startIoBanner.showBanner();
-                    }
-                } catch (Throwable t) {
-                    Log.e(TAG, "Start.io banner error: " + t.getMessage());
-                }
-            });
+            loadAndShowBanner();
         }
 
         @JavascriptInterface
@@ -536,9 +664,7 @@ public class MainActivity extends AppCompatActivity {
                     if (startIoBanner != null) {
                         startIoBanner.hideBanner();
                     }
-                } catch (Throwable t) {
-                    Log.e(TAG, "Start.io hideBanner error: " + t.getMessage());
-                }
+                } catch (Throwable ignored) {}
             });
         }
 
@@ -572,6 +698,7 @@ public class MainActivity extends AppCompatActivity {
                 webView.onResume();
             } catch (Throwable ignored) {}
         }
+        loadAndShowBanner();
     }
 
     @Override

@@ -15,8 +15,7 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({ result, onCreateAn
     setIsProcessing(true);
 
     try {
-      const response = await fetch(result.url);
-      const blob = await response.blob();
+      const blob = result.blob ? result.blob : await (await fetch(result.url)).blob();
       const filename = result.fileName || 'FastPDF_Document.pdf';
       const androidApp = (window as any).AndroidApp;
 
@@ -24,8 +23,19 @@ export const SuccessScreen: React.FC<SuccessScreenProps> = ({ result, onCreateAn
       if (androidApp && typeof androidApp.handlePdfAction === 'function') {
         const reader = new FileReader();
         reader.onloadend = () => {
-          const base64Data = (reader.result as string).split(',')[1];
-          androidApp.handlePdfAction(base64Data, filename, action);
+          try {
+            const resStr = (reader.result as string) || '';
+            const base64Data = resStr.includes(',') ? resStr.split(',')[1] : resStr;
+            androidApp.handlePdfAction(base64Data, filename, action);
+          } catch (bridgeErr) {
+            console.error('Android bridge call failed:', bridgeErr);
+            triggerDownload(result.url, filename);
+          } finally {
+            setIsProcessing(false);
+          }
+        };
+        reader.onerror = () => {
+          triggerDownload(result.url, filename);
           setIsProcessing(false);
         };
         reader.readAsDataURL(blob);

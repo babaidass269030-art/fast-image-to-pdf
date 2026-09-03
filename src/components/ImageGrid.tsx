@@ -48,6 +48,7 @@ export const ImageGrid: React.FC<ImageGridProps> = ({
     if (e.target.files && e.target.files.length > 0) {
       onSelectMoreFiles(e.target.files);
     }
+    e.target.value = '';
   };
 
   // HTML5 Drag & Drop handlers
