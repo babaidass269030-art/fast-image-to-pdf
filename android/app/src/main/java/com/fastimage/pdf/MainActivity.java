@@ -3,6 +3,7 @@ package com.fastimage.pdf;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
@@ -69,8 +70,8 @@ public class MainActivity extends AppCompatActivity {
             StartAppSDK.init(this, STARTIO_APP_ID, false);
             StartAppSDK.setTestAdsEnabled(true);
             StartAppAd.disableSplash();
-        } catch (Exception e) {
-            Log.e(TAG, "Start.io SDK init error: " + e.getMessage());
+        } catch (Throwable t) {
+            Log.e(TAG, "Start.io SDK init error: " + t.getMessage(), t);
         }
 
         // 2. Build Layout: Main WebView + Dedicated Bottom Banner Container
@@ -91,7 +92,9 @@ public class MainActivity extends AppCompatActivity {
 
         // Enable web contents debugging for troubleshooting
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(true);
+            try {
+                WebView.setWebContentsDebuggingEnabled(true);
+            } catch (Throwable ignored) {}
         }
 
         WebSettings webSettings = webView.getSettings();
@@ -123,7 +126,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 super.onReceivedError(view, request, error);
-                if (request.isForMainFrame()) {
+                if (request != null && request.isForMainFrame()) {
                     Log.e(TAG, "Main frame load error: " + error.toString());
                 }
             }
@@ -133,31 +136,46 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
-                Log.d(TAG + "-JS", consoleMessage.message() + " -- From line "
-                        + consoleMessage.lineNumber() + " of "
-                        + consoleMessage.sourceId());
+                if (consoleMessage != null) {
+                    Log.d(TAG + "-JS", consoleMessage.message() + " -- From line "
+                            + consoleMessage.lineNumber() + " of "
+                            + consoleMessage.sourceId());
+                }
                 return true;
             }
 
             @Override
             public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallbackParam, FileChooserParams fileChooserParams) {
-                if (filePathCallback != null) {
-                    filePathCallback.onReceiveValue(null);
-                    filePathCallback = null;
-                }
-                filePathCallback = filePathCallbackParam;
-
-                // Check and request camera permission if capture is enabled and permission not yet granted
-                if (fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
-                    if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                        pendingFileChooserParams = fileChooserParams;
-                        ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
-                        return true;
+                try {
+                    if (filePathCallback != null) {
+                        try {
+                            filePathCallback.onReceiveValue(null);
+                        } catch (Throwable ignored) {}
+                        filePathCallback = null;
                     }
-                }
+                    filePathCallback = filePathCallbackParam;
 
-                launchFileChooser(fileChooserParams);
-                return true;
+                    // Check and request camera permission if capture is enabled and permission not yet granted
+                    if (fileChooserParams != null && fileChooserParams.isCaptureEnabled()) {
+                        if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                            pendingFileChooserParams = fileChooserParams;
+                            ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST_CODE);
+                            return true;
+                        }
+                    }
+
+                    launchFileChooser(fileChooserParams);
+                    return true;
+                } catch (Throwable t) {
+                    Log.e(TAG, "onShowFileChooser error: " + t.getMessage(), t);
+                    if (filePathCallbackParam != null) {
+                        try {
+                            filePathCallbackParam.onReceiveValue(null);
+                        } catch (Throwable ignored) {}
+                    }
+                    filePathCallback = null;
+                    return false;
+                }
             }
         });
 
@@ -189,10 +207,14 @@ public class MainActivity extends AppCompatActivity {
             if (storageDir == null) {
                 storageDir = getCacheDir();
             }
+            if (storageDir != null && !storageDir.exists()) {
+                storageDir.mkdirs();
+            }
             File imageFile = File.createTempFile(imageFileName, ".jpg", storageDir);
-            return FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", imageFile);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to create temp camera file: " + e.getMessage());
+            String authority = getPackageName() + ".fileprovider";
+            return FileProvider.getUriForFile(this, authority, imageFile);
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to create temp camera file with FileProvider: " + t.getMessage(), t);
             return null;
         }
     }
@@ -201,66 +223,78 @@ public class MainActivity extends AppCompatActivity {
      * Launch File Chooser or Camera Intent
      */
     private void launchFileChooser(WebChromeClient.FileChooserParams fileChooserParams) {
-        boolean isCapture = fileChooserParams != null && fileChooserParams.isCaptureEnabled();
-        Intent takePictureIntent = null;
-        cameraPhotoUri = createCameraImageUri();
+        try {
+            boolean isCapture = fileChooserParams != null && fileChooserParams.isCaptureEnabled();
+            Intent takePictureIntent = null;
+            cameraPhotoUri = createCameraImageUri();
 
-        if (cameraPhotoUri != null) {
-            takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-            takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-            takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        }
+            if (cameraPhotoUri != null) {
+                takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+                takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                takePictureIntent.setClipData(ClipData.newRawUri("Camera", cameraPhotoUri));
+            }
 
-        if (isCapture) {
-            // "Take Photo" button with capture="environment" -> Direct camera trigger
-            if (takePictureIntent != null && takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            if (isCapture && takePictureIntent != null) {
+                // "Take Photo" button with capture="environment" -> Direct camera trigger
                 try {
                     startActivityForResult(takePictureIntent, FILE_CHOOSER_RESULT_CODE);
                     return;
-                } catch (ActivityNotFoundException e) {
-                    Log.e(TAG, "Direct camera launch failed: " + e.getMessage());
+                } catch (Throwable e) {
+                    Log.w(TAG, "Direct camera launch failed, falling back to chooser: " + e.getMessage());
                 }
             }
-        }
 
-        // Standard gallery/photo selection with camera as an additional option
-        Intent contentSelectionIntent;
-        if (fileChooserParams != null) {
-            contentSelectionIntent = fileChooserParams.createIntent();
-        } else {
-            contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
-            contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
-            contentSelectionIntent.setType("image/*");
-        }
+            // Standard gallery/photo selection with camera as an additional option
+            Intent contentSelectionIntent = null;
+            if (fileChooserParams != null) {
+                try {
+                    contentSelectionIntent = fileChooserParams.createIntent();
+                } catch (Throwable t) {
+                    Log.w(TAG, "fileChooserParams.createIntent() failed: " + t.getMessage());
+                }
+            }
 
-        Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
-        chooserIntent.putExtra(Intent.EXTRA_INTENT, contentSelectionIntent);
-        chooserIntent.putExtra(Intent.EXTRA_TITLE, "Select Images");
+            if (contentSelectionIntent == null) {
+                contentSelectionIntent = new Intent(Intent.ACTION_GET_CONTENT);
+                contentSelectionIntent.addCategory(Intent.CATEGORY_OPENABLE);
+                contentSelectionIntent.setType("image/*");
+            }
 
-        if (takePictureIntent != null && takePictureIntent.resolveActivity(getPackageManager()) != null) {
-            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{takePictureIntent});
-        }
+            Intent chooserIntent = new Intent(Intent.ACTION_CHOOSER);
+            chooserIntent.putExtra(Intent.EXTRA_INTENT, contentSelectionIntent);
+            chooserIntent.putExtra(Intent.EXTRA_TITLE, "Select Images");
 
-        try {
+            if (takePictureIntent != null) {
+                chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{takePictureIntent});
+            }
+
             startActivityForResult(chooserIntent, FILE_CHOOSER_RESULT_CODE);
-        } catch (ActivityNotFoundException e) {
+        } catch (Throwable e) {
+            Log.e(TAG, "Error in launchFileChooser: " + e.getMessage(), e);
             if (filePathCallback != null) {
-                filePathCallback.onReceiveValue(null);
+                try {
+                    filePathCallback.onReceiveValue(null);
+                } catch (Throwable ignored) {}
                 filePathCallback = null;
             }
             cameraPhotoUri = null;
-            Log.e(TAG, "Activity not found for file chooser: " + e.getMessage());
+            Toast.makeText(MainActivity.this, "Unable to open image picker", Toast.LENGTH_SHORT).show();
         }
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
-            if (filePathCallback != null) {
-                launchFileChooser(pendingFileChooserParams);
-                pendingFileChooserParams = null;
+        try {
+            if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+                if (filePathCallback != null) {
+                    launchFileChooser(pendingFileChooserParams);
+                    pendingFileChooserParams = null;
+                }
             }
+        } catch (Throwable t) {
+            Log.e(TAG, "Error in onRequestPermissionsResult: " + t.getMessage(), t);
         }
     }
 
@@ -268,23 +302,38 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_CHOOSER_RESULT_CODE) {
             if (filePathCallback != null) {
-                Uri[] results = null;
-                if (resultCode == RESULT_OK) {
-                    if (data == null || (data.getData() == null && data.getClipData() == null)) {
-                        // Camera capture saved directly into cameraPhotoUri
-                        if (cameraPhotoUri != null) {
-                            results = new Uri[]{cameraPhotoUri};
-                        }
-                    } else {
-                        results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
-                        if (results == null && cameraPhotoUri != null) {
-                            results = new Uri[]{cameraPhotoUri};
+                try {
+                    Uri[] results = null;
+                    if (resultCode == RESULT_OK) {
+                        if (data == null || (data.getData() == null && data.getClipData() == null)) {
+                            // Camera capture saved directly into cameraPhotoUri
+                            if (cameraPhotoUri != null) {
+                                results = new Uri[]{cameraPhotoUri};
+                            }
+                        } else {
+                            try {
+                                results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+                            } catch (Throwable t) {
+                                Log.w(TAG, "parseResult failed: " + t.getMessage());
+                            }
+                            if (results == null && data.getData() != null) {
+                                results = new Uri[]{data.getData()};
+                            }
+                            if (results == null && cameraPhotoUri != null) {
+                                results = new Uri[]{cameraPhotoUri};
+                            }
                         }
                     }
+                    filePathCallback.onReceiveValue(results);
+                } catch (Throwable t) {
+                    Log.e(TAG, "Error processing file chooser result: " + t.getMessage(), t);
+                    try {
+                        filePathCallback.onReceiveValue(null);
+                    } catch (Throwable ignored) {}
+                } finally {
+                    filePathCallback = null;
+                    cameraPhotoUri = null;
                 }
-                filePathCallback.onReceiveValue(results);
-                filePathCallback = null;
-                cameraPhotoUri = null;
             }
         } else {
             super.onActivityResult(requestCode, resultCode, data);
@@ -300,7 +349,24 @@ public class MainActivity extends AppCompatActivity {
         public void handlePdfAction(String base64Data, String filename, String action) {
             runOnUiThread(() -> {
                 try {
-                    byte[] pdfBytes = Base64.decode(base64Data, Base64.DEFAULT);
+                    if (base64Data == null || base64Data.trim().isEmpty()) {
+                        Toast.makeText(MainActivity.this, "Error: PDF data is empty", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String safeFilename = filename;
+                    if (safeFilename == null || safeFilename.trim().isEmpty()) {
+                        safeFilename = "FastPDF_" + System.currentTimeMillis() + ".pdf";
+                    }
+
+                    byte[] pdfBytes;
+                    try {
+                        pdfBytes = Base64.decode(base64Data, Base64.DEFAULT);
+                    } catch (Throwable t) {
+                        Log.e(TAG, "Failed to decode base64: " + t.getMessage());
+                        Toast.makeText(MainActivity.this, "Failed to decode PDF data", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
                     File docsDir = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
                     if (docsDir == null) {
                         docsDir = getFilesDir();
@@ -309,36 +375,69 @@ public class MainActivity extends AppCompatActivity {
                     if (!pdfDir.exists()) {
                         pdfDir.mkdirs();
                     }
-                    File pdfFile = new File(pdfDir, filename);
-                    FileOutputStream fos = new FileOutputStream(pdfFile);
-                    fos.write(pdfBytes);
-                    fos.flush();
-                    fos.close();
+                    File pdfFile = new File(pdfDir, safeFilename);
 
-                    Uri fileUri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", pdfFile);
+                    try (FileOutputStream fos = new FileOutputStream(pdfFile)) {
+                        fos.write(pdfBytes);
+                        fos.flush();
+                    }
+
+                    String authority = getPackageName() + ".fileprovider";
+                    Uri fileUri;
+                    try {
+                        fileUri = FileProvider.getUriForFile(MainActivity.this, authority, pdfFile);
+                    } catch (Throwable t) {
+                        Log.e(TAG, "FileProvider getUriForFile failed: " + t.getMessage(), t);
+                        Toast.makeText(MainActivity.this, "Error preparing PDF: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                        return;
+                    }
 
                     if ("share".equals(action)) {
-                        Intent shareIntent = new Intent(Intent.ACTION_SEND);
-                        shareIntent.setType("application/pdf");
-                        shareIntent.putExtra(Intent.EXTRA_STREAM, fileUri);
-                        shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        Intent chooser = Intent.createChooser(shareIntent, "Share PDF");
-                        chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        startActivity(chooser);
+                        try {
+                            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                            shareIntent.setType("application/pdf");
+                            shareIntent.putExtra(Intent.EXTRA_STREAM, fileUri);
+                            shareIntent.setClipData(ClipData.newRawUri("PDF", fileUri));
+                            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+                            Intent chooser = Intent.createChooser(shareIntent, "Share PDF");
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(chooser);
+                        } catch (ActivityNotFoundException e) {
+                            Log.e(TAG, "No app available to share PDF: " + e.getMessage());
+                            Toast.makeText(MainActivity.this, "No app found to share PDF", Toast.LENGTH_SHORT).show();
+                        } catch (Throwable t) {
+                            Log.e(TAG, "Failed to share PDF: " + t.getMessage(), t);
+                            Toast.makeText(MainActivity.this, "Could not share PDF", Toast.LENGTH_SHORT).show();
+                        }
                     } else if ("open".equals(action)) {
-                        Intent openIntent = new Intent(Intent.ACTION_VIEW);
-                        openIntent.setDataAndType(fileUri, "application/pdf");
-                        openIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                        Intent chooser = Intent.createChooser(openIntent, "Open PDF");
-                        chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        startActivity(chooser);
+                        try {
+                            Intent openIntent = new Intent(Intent.ACTION_VIEW);
+                            openIntent.setDataAndType(fileUri, "application/pdf");
+                            openIntent.setClipData(ClipData.newRawUri("PDF", fileUri));
+                            openIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                            Intent chooser = Intent.createChooser(openIntent, "Open PDF");
+                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(chooser);
+                        } catch (ActivityNotFoundException e) {
+                            Log.e(TAG, "No app available to open PDF: " + e.getMessage());
+                            Toast.makeText(MainActivity.this, "No PDF viewer app installed", Toast.LENGTH_LONG).show();
+                        } catch (Throwable t) {
+                            Log.e(TAG, "Failed to open PDF: " + t.getMessage(), t);
+                            Toast.makeText(MainActivity.this, "Could not open PDF", Toast.LENGTH_SHORT).show();
+                        }
                     } else {
                         Toast.makeText(MainActivity.this, "Saved: " + pdfFile.getName(), Toast.LENGTH_SHORT).show();
-                        MediaScannerConnection.scanFile(MainActivity.this, new String[]{pdfFile.getAbsolutePath()}, new String[]{"application/pdf"}, null);
+                        try {
+                            MediaScannerConnection.scanFile(MainActivity.this, new String[]{pdfFile.getAbsolutePath()}, new String[]{"application/pdf"}, null);
+                        } catch (Throwable ignored) {}
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error handling PDF action: " + e.getMessage());
-                    Toast.makeText(MainActivity.this, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                } catch (Throwable t) {
+                    Log.e(TAG, "Error handling PDF action: " + t.getMessage(), t);
+                    Toast.makeText(MainActivity.this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
         }
@@ -359,8 +458,8 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 try {
                     StartAppSDK.setTestAdsEnabled(testMode);
-                } catch (Exception e) {
-                    Log.e(TAG, "StartAppSDK setTestAdsEnabled error: " + e.getMessage());
+                } catch (Throwable t) {
+                    Log.e(TAG, "StartAppSDK setTestAdsEnabled error: " + t.getMessage());
                 }
             });
         }
@@ -369,6 +468,7 @@ public class MainActivity extends AppCompatActivity {
         public void showBanner(String position) {
             runOnUiThread(() -> {
                 try {
+                    if (bannerContainer == null) return;
                     if (startIoBanner == null) {
                         startIoBanner = new Banner(MainActivity.this, new BannerListener() {
                             @Override
@@ -400,8 +500,8 @@ public class MainActivity extends AppCompatActivity {
                         bannerContainer.setVisibility(View.VISIBLE);
                         startIoBanner.showBanner();
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Start.io banner error: " + e.getMessage());
+                } catch (Throwable t) {
+                    Log.e(TAG, "Start.io banner error: " + t.getMessage());
                 }
             });
         }
@@ -416,8 +516,8 @@ public class MainActivity extends AppCompatActivity {
                     if (startIoBanner != null) {
                         startIoBanner.hideBanner();
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Start.io hideBanner error: " + e.getMessage());
+                } catch (Throwable t) {
+                    Log.e(TAG, "Start.io hideBanner error: " + t.getMessage());
                 }
             });
         }
@@ -427,8 +527,8 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 try {
                     StartAppAd.showAd(MainActivity.this);
-                } catch (Exception e) {
-                    Log.e(TAG, "StartAppAd showAd error: " + e.getMessage());
+                } catch (Throwable t) {
+                    Log.e(TAG, "StartAppAd showAd error: " + t.getMessage());
                 }
             });
         }
