@@ -5,7 +5,7 @@
 
 export const START_IO_CONFIG = {
   appId: '207781120',
-  testMode: true, // Enables official Start.io test ad mode during development/testing
+  testMode: false, // Production live ads enabled
   bannerPosition: 'bottom' as const,
 };
 

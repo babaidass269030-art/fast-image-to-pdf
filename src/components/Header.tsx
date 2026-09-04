@@ -1,5 +1,5 @@
 import React from 'react';
-import { Trash2, ShieldCheck, Image as ImageIcon, Info } from 'lucide-react';
+import { Trash2, ShieldCheck, Image as ImageIcon, Info, Globe } from 'lucide-react';
 
 interface HeaderProps {
   imageCount: number;
@@ -14,6 +14,20 @@ export const Header: React.FC<HeaderProps> = ({
   onSelectMore,
   onOpenAbout,
 }) => {
+  const handleOpenMoreTools = () => {
+    const url = 'https://quicktoolboxfree.blogspot.com/';
+    const androidApp = (window as any).AndroidApp;
+    if (androidApp && typeof androidApp.openExternalUrl === 'function') {
+      try {
+        androidApp.openExternalUrl(url);
+        return;
+      } catch (e) {
+        console.warn('Android bridge openExternalUrl error:', e);
+      }
+    }
+    window.open(url, '_blank');
+  };
+
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-100 shadow-xs">
       <div className="max-w-xl mx-auto px-5 py-3.5 flex items-center justify-between">
@@ -67,6 +81,18 @@ export const Header: React.FC<HeaderProps> = ({
               100% Local
             </span>
           )}
+
+          <button
+            id="btn-header-more-tools"
+            type="button"
+            onClick={handleOpenMoreTools}
+            className="text-xs font-medium text-slate-700 hover:text-blue-600 bg-slate-100/90 hover:bg-blue-50 active:bg-blue-100 px-2.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-slate-200/70"
+            title="More Free Online Tools (quicktoolboxfree.blogspot.com)"
+            aria-label="More Free Online Tools"
+          >
+            <Globe className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span className="hidden sm:inline">More Tools</span>
+          </button>
 
           {onOpenAbout && (
             <button

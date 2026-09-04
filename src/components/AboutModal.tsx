@@ -196,6 +196,18 @@ export const AboutModal: React.FC<AboutModalProps> = ({
                     {contactEmail}
                   </a>
                 </div>
+                <div className="flex justify-between items-center pt-1 border-t border-blue-100/60">
+                  <span className="text-gray-500 font-medium">More Tools</span>
+                  <a
+                    href="https://quicktoolboxfree.blogspot.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    <span>Quick Toolbox</span>
+                    <ExternalLink className="w-3 h-3 inline" />
+                  </a>
+                </div>
               </div>
             </div>
           )}

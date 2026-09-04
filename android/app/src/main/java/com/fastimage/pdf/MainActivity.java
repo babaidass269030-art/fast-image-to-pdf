@@ -146,6 +146,24 @@ public class MainActivity extends AppCompatActivity {
             // Custom WebViewClient with logging and error reporting
             webView.setWebViewClient(new WebViewClient() {
                 @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    if (request != null && request.getUrl() != null) {
+                        String url = request.getUrl().toString();
+                        if (url.startsWith("http://") || url.startsWith("https://")) {
+                            if (!url.contains("android_asset")) {
+                                try {
+                                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                    startActivity(intent);
+                                    return true;
+                                } catch (Throwable ignored) {}
+                            }
+                        }
+                    }
+                    return false;
+                }
+
+                @Override
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
                     Log.d(TAG, "Page loaded successfully: " + url);
@@ -223,8 +241,8 @@ public class MainActivity extends AppCompatActivity {
     private void initAndShowStartIoAds() {
         runOnUiThread(() -> {
             try {
-                StartAppSDK.init(this, STARTIO_APP_ID, false);
-                StartAppSDK.setTestAdsEnabled(true);
+                StartAppSDK.setTestAdsEnabled(false);
+                StartAppSDK.init(this, "207781120", false);
                 StartAppAd.disableSplash();
                 loadAndShowBanner();
             } catch (Throwable t) {
@@ -625,6 +643,21 @@ public class MainActivity extends AppCompatActivity {
                 } catch (Throwable ignored) {}
             });
         }
+
+        @JavascriptInterface
+        public void openExternalUrl(String url) {
+            runOnUiThread(() -> {
+                try {
+                    if (url != null && !url.trim().isEmpty()) {
+                        Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(url.trim()));
+                        browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        startActivity(browserIntent);
+                    }
+                } catch (Throwable t) {
+                    Log.e(TAG, "Failed to open external url: " + t.getMessage(), t);
+                }
+            });
+        }
     }
 
     /**
@@ -641,7 +674,7 @@ public class MainActivity extends AppCompatActivity {
         public void init(String appId, boolean testMode) {
             runOnUiThread(() -> {
                 try {
-                    StartAppSDK.setTestAdsEnabled(testMode);
+                    StartAppSDK.setTestAdsEnabled(false);
                     loadAndShowBanner();
                 } catch (Throwable t) {
                     Log.e(TAG, "StartAppSDK setTestAdsEnabled error: " + t.getMessage());
