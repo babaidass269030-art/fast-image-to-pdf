@@ -39,12 +39,13 @@ jobs:
       - name: Make Gradle Executable
         run: chmod +x android/gradlew
 
-      - name: Build Debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug
+      - name: Build Release APK
+  working-directory: android
+  run: ./gradlew assembleRelease
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FastPDF-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+
+      - - name: Upload APK
+  uses: actions/upload-artifact@v4
+  with:
+    name: FastPDF-release-apk
+    path: android/app/build/outputs/apk/release/*.apk
