@@ -230,10 +230,22 @@ export default function App() {
         totalSteps: 0,
         currentImageName: '',
         percentage: 0,
-        errorMessage: err.message,
+        errorMessage: err?.message || 'Failed to create PDF.',
       });
-      showToast('Failed to create PDF.', 'error');
+      showToast('Conversion issue encountered. Please retry with standard quality.', 'error');
     }
+  };
+
+  const handleDismissError = () => {
+    setProgress(prev => ({ ...prev, errorMessage: null }));
+  };
+
+  const handleRetryWithStandard = () => {
+    setSettings(prev => ({ ...prev, quality: 'standard' }));
+    setProgress(prev => ({ ...prev, errorMessage: null }));
+    setTimeout(() => {
+      handleCreatePdf();
+    }, 50);
   };
 
   const handleCreateAnother = () => {
@@ -365,7 +377,11 @@ export default function App() {
         onClose={() => setIsOptionsOpen(false)}
         onUpdateSettings={handleUpdateSettings}
       />
-      <ProgressModal progress={progress} />
+      <ProgressModal
+        progress={progress}
+        onDismissError={handleDismissError}
+        onRetryWithStandard={handleRetryWithStandard}
+      />
       <AboutModal
         isOpen={isAboutOpen}
         onClose={() => setIsAboutOpen(false)}

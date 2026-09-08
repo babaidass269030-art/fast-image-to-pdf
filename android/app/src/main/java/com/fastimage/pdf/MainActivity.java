@@ -17,8 +17,11 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.ConsoleMessage;
+import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -143,21 +146,57 @@ public class MainActivity extends AppCompatActivity {
                 Log.e(TAG, "JavaScriptInterface registration error: " + t.getMessage(), t);
             }
 
-            // Custom WebViewClient with logging and error reporting
+            // 3. Register WebView DownloadListener for blob and file downloads
+            webView.setDownloadListener(new DownloadListener() {
+                @Override
+                public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+                    handleWebViewDownload(url, contentDisposition, mimetype);
+                }
+            });
+
+            // 4. Custom WebViewClient with logging, blob intercept, and crash recovery
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                     if (request != null && request.getUrl() != null) {
-                        String url = request.getUrl().toString();
-                        if (url.startsWith("http://") || url.startsWith("https://")) {
+                        Uri uri = request.getUrl();
+                        String scheme = uri.getScheme();
+                        String url = uri.toString();
+
+                        if ("blob".equalsIgnoreCase(scheme) || "data".equalsIgnoreCase(scheme)) {
+                            // Intercept blob/data downloads directly so WebView never shows an error screen
+                            handleWebViewDownload(url, null, "application/pdf");
+                            return true;
+                        }
+
+                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) {
                             if (!url.contains("android_asset")) {
                                 try {
-                                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                                    Intent intent = new Intent(Intent.ACTION_VIEW, uri);
                                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                                     startActivity(intent);
                                     return true;
                                 } catch (Throwable ignored) {}
                             }
+                        }
+                    }
+                    return false;
+                }
+
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                    if (url != null) {
+                        if (url.startsWith("blob:") || url.startsWith("data:")) {
+                            handleWebViewDownload(url, null, "application/pdf");
+                            return true;
+                        }
+                        if ((url.startsWith("http://") || url.startsWith("https://")) && !url.contains("android_asset")) {
+                            try {
+                                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                startActivity(intent);
+                                return true;
+                            } catch (Throwable ignored) {}
                         }
                     }
                     return false;
@@ -171,10 +210,39 @@ public class MainActivity extends AppCompatActivity {
 
                 @Override
                 public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                    super.onReceivedError(view, request, error);
-                    if (request != null && request.isForMainFrame()) {
-                        Log.e(TAG, "Main frame load error: " + error.toString());
+                    // Do NOT call super.onReceivedError to prevent displaying Android's raw "Webpage not available" error screen
+                    if (request != null && request.getUrl() != null) {
+                        String url = request.getUrl().toString();
+                        if (url.startsWith("blob:") || url.startsWith("data:")) {
+                            return; // Suppress blob/data URL errors
+                        }
+                        Log.w(TAG, "WebView load error on: " + url);
                     }
+                }
+
+                @Override
+                public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
+                    if (failingUrl != null && (failingUrl.startsWith("blob:") || failingUrl.startsWith("data:"))) {
+                        return;
+                    }
+                    Log.w(TAG, "WebView legacy error: " + description);
+                }
+
+                @Override
+                public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                    Log.e(TAG, "WebView render process gone. Crashed: " + (detail != null && detail.didCrash()));
+                    try {
+                        if (webView != null) {
+                            ViewGroup parent = (ViewGroup) webView.getParent();
+                            if (parent != null) {
+                                parent.removeView(webView);
+                            }
+                            webView.destroy();
+                            webView = null;
+                        }
+                    } catch (Throwable ignored) {}
+                    recreate();
+                    return true;
                 }
             });
 
@@ -475,9 +543,55 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Handle downloads triggered in WebView (blob:, data:, or remote)
+     */
+    private void handleWebViewDownload(String url, String contentDisposition, String mimeType) {
+        if (url == null) return;
+        runOnUiThread(() -> {
+            try {
+                if (url.startsWith("blob:")) {
+                    String script = "javascript:(function() {" +
+                            "  try {" +
+                            "    fetch('" + url + "')" +
+                            "      .then(function(r) { return r.blob(); })" +
+                            "      .then(function(b) {" +
+                            "        var reader = new FileReader();" +
+                            "        reader.onloadend = function() {" +
+                            "          if (window.AndroidApp && window.AndroidApp.handlePdfAction) {" +
+                            "            window.AndroidApp.handlePdfAction(reader.result, 'FastPDF_Document.pdf', 'download');" +
+                            "          }" +
+                            "        };" +
+                            "        reader.readAsDataURL(b);" +
+                            "      })" +
+                            "      .catch(function(err) { console.error('Blob fetch error: ', err); });" +
+                            "  } catch(e) { console.error('Blob download failed: ', e); }" +
+                            "})();";
+                    if (webView != null) {
+                        webView.evaluateJavascript(script, null);
+                    }
+                } else if (url.startsWith("data:")) {
+                    String base64 = url.contains(",") ? url.substring(url.indexOf(",") + 1) : url;
+                    new AndroidAppBridge().handlePdfAction(base64, "FastPDF_Document.pdf", "download");
+                } else if (url.startsWith("http://") || url.startsWith("https://")) {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                }
+            } catch (Throwable t) {
+                Log.e(TAG, "Failed to handle download: " + t.getMessage(), t);
+            }
+        });
+    }
+
+    /**
      * Native JavaScript Interface for PDF Actions (Download, Open, Share) and Ads
      */
     public class AndroidAppBridge {
+
+        @JavascriptInterface
+        public void saveBase64File(String base64Data, String filename, String mimeType) {
+            handlePdfAction(base64Data, filename, "download");
+        }
 
         @JavascriptInterface
         public void handlePdfAction(String base64Data, String filename, String action) {
@@ -495,12 +609,24 @@ public class MainActivity extends AppCompatActivity {
                         safeFilename = safeFilename + ".pdf";
                     }
 
+                    // Clean base64 header if present
+                    String cleanBase64 = base64Data;
+                    if (cleanBase64.contains(",")) {
+                        cleanBase64 = cleanBase64.substring(cleanBase64.indexOf(",") + 1);
+                    }
+                    cleanBase64 = cleanBase64.trim().replaceAll("\\s+", "");
+
                     byte[] pdfBytes;
                     try {
-                        pdfBytes = Base64.decode(base64Data, Base64.DEFAULT);
+                        pdfBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
                     } catch (Throwable t) {
                         Log.e(TAG, "Failed to decode base64: " + t.getMessage());
                         Toast.makeText(MainActivity.this, "Failed to decode PDF data", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    if (pdfBytes == null || pdfBytes.length == 0) {
+                        Toast.makeText(MainActivity.this, "Error: PDF bytes are empty", Toast.LENGTH_SHORT).show();
                         return;
                     }
 
@@ -514,7 +640,24 @@ public class MainActivity extends AppCompatActivity {
                     String authority = getPackageName() + ".fileprovider";
                     Uri fileUri = FileProvider.getUriForFile(MainActivity.this, authority, cachePdfFile);
 
-                    // 2. Save directly to public Downloads folder for user accessibility
+                    // 2. Save to App-Specific External Files Dir (guaranteed writable without permissions on all Android/Fire OS)
+                    try {
+                        File appDownloadsDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                        if (appDownloadsDir != null) {
+                            if (!appDownloadsDir.exists()) {
+                                appDownloadsDir.mkdirs();
+                            }
+                            File appPdfFile = new File(appDownloadsDir, safeFilename);
+                            try (FileOutputStream fos = new FileOutputStream(appPdfFile)) {
+                                fos.write(pdfBytes);
+                                fos.flush();
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.w(TAG, "App external downloads write failed: " + t.getMessage());
+                    }
+
+                    // 3. Save to Public Downloads folder for user accessibility
                     boolean savedToPublicDownloads = false;
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -593,23 +736,12 @@ public class MainActivity extends AppCompatActivity {
                         // Download / Save Action
                         String msg = savedToPublicDownloads
                                 ? "Saved to Downloads/FastPDF: " + safeFilename
-                                : "Saved: " + safeFilename;
+                                : "PDF saved successfully: " + safeFilename;
                         Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
-
-                        // Offer user to open the downloaded file immediately
-                        try {
-                            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
-                            viewIntent.setDataAndType(fileUri, "application/pdf");
-                            viewIntent.setClipData(ClipData.newRawUri("PDF", fileUri));
-                            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                            Intent chooser = Intent.createChooser(viewIntent, "Open " + safeFilename);
-                            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-                            startActivity(chooser);
-                        } catch (Throwable ignored) {}
                     }
                 } catch (Throwable t) {
                     Log.e(TAG, "Error handling PDF action: " + t.getMessage(), t);
-                    Toast.makeText(MainActivity.this, "Error: " + t.getMessage(), Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, "Error saving PDF: " + t.getMessage(), Toast.LENGTH_SHORT).show();
                 }
             });
         }

@@ -6,7 +6,7 @@ interface ProgressCallback {
   (current: number, total: number, imageName: string): void;
 }
 
-// Helper to read a File to Data URL safely via FileReader
+// Helper to read a File to Data URL safely with timeout
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -14,106 +14,167 @@ function readFileAsDataUrl(file: File): Promise<string> {
       if (typeof reader.result === 'string') {
         resolve(reader.result);
       } else {
-        reject(new Error('FileReader did not return a string'));
+        reject(new Error('FileReader did not produce string output'));
       }
     };
-    reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+    reader.onerror = () => reject(reader.error || new Error('FileReader read error'));
     reader.readAsDataURL(file);
   });
 }
 
-// Helper to load an image source into HTMLImageElement or ImageBitmap safely
+// Helper to load an image source into HTMLImageElement safely using blob URL first
 async function loadDrawableSource(
   imgItem: SelectedImage
-): Promise<{ source: CanvasImageSource; width: number; height: number }> {
-  // Strategy 1: Try reading file via FileReader if available (most reliable across Android WebViews / iframes)
+): Promise<{ source: HTMLImageElement; width: number; height: number; cleanup: () => void }> {
+  let objectUrlToRevoke: string | null = null;
+
+  const tryLoadFromSrc = (src: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Image element failed to decode source'));
+      img.src = src;
+    });
+  };
+
+  // Strategy 1: URL.createObjectURL (consumes far less heap than base64 string)
+  if (imgItem.file) {
+    try {
+      const objUrl = URL.createObjectURL(imgItem.file);
+      objectUrlToRevoke = objUrl;
+      const img = await tryLoadFromSrc(objUrl);
+      const width = img.naturalWidth || img.width || imgItem.width || 800;
+      const height = img.naturalHeight || img.height || imgItem.height || 600;
+      return {
+        source: img,
+        width,
+        height,
+        cleanup: () => {
+          if (objectUrlToRevoke) {
+            try { URL.revokeObjectURL(objectUrlToRevoke); } catch (_) {}
+            objectUrlToRevoke = null;
+          }
+          img.src = '';
+        },
+      };
+    } catch (e1) {
+      if (objectUrlToRevoke) {
+        try { URL.revokeObjectURL(objectUrlToRevoke); } catch (_) {}
+        objectUrlToRevoke = null;
+      }
+      console.warn('Strategy 1 (createObjectURL) failed, trying FileReader:', e1);
+    }
+  }
+
+  // Strategy 2: FileReader Data URL
   if (imgItem.file) {
     try {
       const dataUrl = await readFileAsDataUrl(imgItem.file);
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Image decode failed from file dataUrl'));
-        img.src = dataUrl;
-      });
+      const img = await tryLoadFromSrc(dataUrl);
       const width = img.naturalWidth || img.width || imgItem.width || 800;
       const height = img.naturalHeight || img.height || imgItem.height || 600;
-      return { source: img, width, height };
-    } catch (e1) {
-      console.warn('FileReader strategy failed, attempting blob URL:', e1);
-    }
-  }
-
-  // Strategy 2: Try URL.createObjectURL without crossOrigin
-  if (imgItem.file) {
-    try {
-      const blobUrl = URL.createObjectURL(imgItem.file);
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Blob URL image load failed'));
-        img.src = blobUrl;
-      });
-      URL.revokeObjectURL(blobUrl);
-      const width = img.naturalWidth || img.width || imgItem.width || 800;
-      const height = img.naturalHeight || img.height || imgItem.height || 600;
-      return { source: img, width, height };
+      return {
+        source: img,
+        width,
+        height,
+        cleanup: () => { img.src = ''; },
+      };
     } catch (e2) {
-      console.warn('Blob URL strategy failed, falling back to previewUrl:', e2);
+      console.warn('Strategy 2 (FileReader) failed, falling back to previewUrl:', e2);
     }
   }
 
-  // Strategy 3: Try previewUrl (which was already loaded previously in UI)
+  // Strategy 3: previewUrl (already cached thumbnail in memory)
   if (imgItem.previewUrl) {
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error(`Failed to load preview for ${imgItem.name}`));
-      img.src = imgItem.previewUrl;
-    });
-    const width = img.naturalWidth || img.width || imgItem.width || 800;
-    const height = img.naturalHeight || img.height || imgItem.height || 600;
-    return { source: img, width, height };
+    try {
+      const img = await tryLoadFromSrc(imgItem.previewUrl);
+      const width = img.naturalWidth || img.width || imgItem.width || 800;
+      const height = img.naturalHeight || img.height || imgItem.height || 600;
+      return {
+        source: img,
+        width,
+        height,
+        cleanup: () => { img.src = ''; },
+      };
+    } catch (e3) {
+      console.warn('Strategy 3 (previewUrl) failed:', e3);
+    }
   }
 
-  throw new Error(`Failed to load image: ${imgItem.name}`);
+  throw new Error(`Unable to read image source for: ${imgItem.name}`);
 }
 
-// Convert image file or preview URL with optional rotation to canvas data URL with controlled quality
-async function processImageToDataUrl(
-  imgItem: SelectedImage,
+// Single-pass canvas processor: handles scaling, rotation, and crop with memory safeguards
+function renderImageToJpegDataUrl(
+  img: HTMLImageElement,
+  origW: number,
+  origH: number,
+  rotationDeg: number,
+  maxDimension: number,
   qualityFactor: number,
-  maxDimension: number
-): Promise<{ dataUrl: string; width: number; height: number; format: 'JPEG' }> {
-  const { source, width: origW, height: origH } = await loadDrawableSource(imgItem);
-
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('Canvas 2D context not supported');
-  }
-
-  const rotation = ((imgItem.rotation % 360) + 360) % 360;
+  targetRatio?: number // if fill crop is desired
+): { dataUrl: string; width: number; height: number } {
+  const rotation = ((rotationDeg % 360) + 360) % 360;
   const isRotated90or270 = rotation === 90 || rotation === 270;
 
-  // Scale down if larger than max dimension for performance and reasonable PDF sizing
+  // Visual dimensions before rotation
+  let srcW = origW;
+  let srcH = origH;
+  let srcX = 0;
+  let srcY = 0;
+
+  // If fill crop is requested, compute the crop box directly on source
+  if (targetRatio && targetRatio > 0) {
+    // Current aspect ratio as oriented
+    const currentOrientedRatio = isRotated90or270 ? origH / origW : origW / origH;
+    if (Math.abs(currentOrientedRatio - targetRatio) > 0.005) {
+      if (isRotated90or270) {
+        // Rotated 90 or 270: targetRatio applies to oriented aspect (origH / origW)
+        if (currentOrientedRatio > targetRatio) {
+          srcH = Math.max(1, Math.round(origW * targetRatio));
+          srcY = Math.max(0, Math.round((origH - srcH) / 2));
+        } else {
+          srcW = Math.max(1, Math.round(origH / targetRatio));
+          srcX = Math.max(0, Math.round((origW - srcW) / 2));
+        }
+      } else {
+        if (currentOrientedRatio > targetRatio) {
+          srcW = Math.max(1, Math.round(origH * targetRatio));
+          srcX = Math.max(0, Math.round((origW - srcW) / 2));
+        } else {
+          srcH = Math.max(1, Math.round(origW / targetRatio));
+          srcY = Math.max(0, Math.round((origH - srcH) / 2));
+        }
+      }
+    }
+  }
+
+  // Scale down to safe max dimension for low-memory mobile/tablet environments
+  const effectiveMaxDim = Math.max(800, maxDimension);
   let scale = 1;
-  if (origW > maxDimension || origH > maxDimension) {
-    scale = Math.min(maxDimension / origW, maxDimension / origH);
+  const maxSrcDim = Math.max(srcW, srcH);
+  if (maxSrcDim > effectiveMaxDim) {
+    scale = effectiveMaxDim / maxSrcDim;
   }
 
-  const targetW = Math.max(1, Math.round(origW * scale));
-  const targetH = Math.max(1, Math.round(origH * scale));
+  const outW = Math.max(1, Math.round(srcW * scale));
+  const outH = Math.max(1, Math.round(srcH * scale));
 
+  const canvas = document.createElement('canvas');
   if (isRotated90or270) {
-    canvas.width = targetH;
-    canvas.height = targetW;
+    canvas.width = outH;
+    canvas.height = outW;
   } else {
-    canvas.width = targetW;
-    canvas.height = targetH;
+    canvas.width = outW;
+    canvas.height = outH;
   }
 
-  // Fill white background for transparent or empty regions
+  const ctx = canvas.getContext('2d', { willReadFrequently: false });
+  if (!ctx) {
+    throw new Error('Canvas 2D context unavailable');
+  }
+
+  // Draw pure white background to avoid transparent black artifacts in PDF
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -129,15 +190,29 @@ async function processImageToDataUrl(
     ctx.rotate((270 * Math.PI) / 180);
   }
 
-  ctx.drawImage(source, 0, 0, targetW, targetH);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
   ctx.restore();
 
-  const dataUrl = canvas.toDataURL('image/jpeg', qualityFactor);
+  let dataUrl = canvas.toDataURL('image/jpeg', qualityFactor);
+
+  // If output failed or is empty, fallback with lower resolution
+  if (!dataUrl || dataUrl.length < 50 || dataUrl === 'data:,') {
+    dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+  }
+
+  const resultW = canvas.width;
+  const resultH = canvas.height;
+
+  // Immediate cleanup of canvas backing store
+  canvas.width = 0;
+  canvas.height = 0;
+
   return {
     dataUrl,
-    width: canvas.width,
-    height: canvas.height,
-    format: 'JPEG',
+    width: resultW,
+    height: resultH,
   };
 }
 
@@ -146,26 +221,26 @@ export async function generatePdf(
   settings: PdfSettings,
   onProgress?: ProgressCallback
 ): Promise<GeneratedPdfResult> {
-  if (images.length === 0) {
-    throw new Error('No images selected to generate PDF');
+  if (!images || images.length === 0) {
+    throw new Error('No images selected for PDF generation.');
   }
 
-  // PDF Quality configurations
-  // Standard: smaller file size (0.65 quality, max 1600px)
-  // High: balanced quality and size (0.82 quality, max 2400px)
-  // Best: highest practical image quality (0.95 quality, max 3600px)
-  let qualityFactor = 0.82;
-  let maxDimension = 2400;
+  // Memory-safe mobile configuration:
+  // Standard: 1200px max, 0.70 quality (fastest, lightest RAM footprint)
+  // High: 1800px max, 0.80 quality (crisp 250+ DPI A4 document, perfectly balanced)
+  // Best: 2200px max, 0.88 quality (sharp print detail without crashing WebView)
+  let qualityFactor = 0.80;
+  let maxDimension = 1800;
 
   if (settings.quality === 'standard') {
-    qualityFactor = 0.65;
-    maxDimension = 1600;
+    qualityFactor = 0.70;
+    maxDimension = 1200;
   } else if (settings.quality === 'best') {
-    qualityFactor = 0.95;
-    maxDimension = 3600;
+    qualityFactor = 0.88;
+    maxDimension = 2200;
   } else {
-    qualityFactor = 0.82;
-    maxDimension = 2400;
+    qualityFactor = 0.80;
+    maxDimension = 1800;
   }
 
   let doc: jsPDF | null = null;
@@ -173,148 +248,150 @@ export async function generatePdf(
   for (let i = 0; i < images.length; i++) {
     const imgItem = images[i];
     if (onProgress) {
-      onProgress(i + 1, images.length, imgItem.name);
+      onProgress(i + 1, images.length, imgItem.name || `Image ${i + 1}`);
     }
 
-    // Yield to browser event loop to let UI render progress
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    // Yield to let browser update progress UI and trigger minor garbage collection
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const { dataUrl, width: imgW, height: imgH, format } = await processImageToDataUrl(
-      imgItem,
-      qualityFactor,
-      maxDimension
-    );
+    // Load drawable image source safely
+    const { source: imgElem, width: rawW, height: rawH, cleanup } = await loadDrawableSource(imgItem);
 
-    // Determine page size and orientation for this page
-    let pageOrientation: 'p' | 'l' = 'p';
-    if (settings.orientation === 'portrait') {
-      pageOrientation = 'p';
-    } else if (settings.orientation === 'landscape') {
-      pageOrientation = 'l';
-    } else {
-      // Auto orientation based on image aspect ratio
-      pageOrientation = imgW > imgH ? 'l' : 'p';
-    }
+    try {
+      // Determine page orientation and dimensions
+      const rotation = ((imgItem.rotation % 360) + 360) % 360;
+      const isRotated = rotation === 90 || rotation === 270;
+      const visualW = isRotated ? rawH : rawW;
+      const visualH = isRotated ? rawW : rawH;
 
-    let pageWidthMm = 210;
-    let pageHeightMm = 297;
-    let formatArg: string | [number, number] = 'a4';
-
-    if (settings.pageSize === 'letter') {
-      pageWidthMm = pageOrientation === 'l' ? 279.4 : 215.9;
-      pageHeightMm = pageOrientation === 'l' ? 215.9 : 279.4;
-      formatArg = 'letter';
-    } else if (settings.pageSize === 'original') {
-      // Custom dimensions matching exact image aspect ratio
-      const standardWidthMm = 210;
-      pageWidthMm = standardWidthMm;
-      pageHeightMm = (imgH / imgW) * standardWidthMm;
-      pageOrientation = pageWidthMm > pageHeightMm ? 'l' : 'p';
-      formatArg = [pageWidthMm, pageHeightMm];
-    } else {
-      // Default A4
-      pageWidthMm = pageOrientation === 'l' ? 297 : 210;
-      pageHeightMm = pageOrientation === 'l' ? 210 : 297;
-      formatArg = 'a4';
-    }
-
-    // Initialize document on first page, or add new page
-    if (i === 0) {
-      doc = new jsPDF({
-        orientation: pageOrientation,
-        unit: 'mm',
-        format: formatArg,
-        compress: true,
-      });
-    } else {
-      doc!.addPage(formatArg, pageOrientation);
-    }
-
-    // Calculate margins
-    let marginMm = 0;
-    if (settings.margin === 'small') marginMm = 6;
-    if (settings.margin === 'medium') marginMm = 14;
-
-    const printableWidth = Math.max(10, pageWidthMm - marginMm * 2);
-    const printableHeight = Math.max(10, pageHeightMm - marginMm * 2);
-
-    const imgRatio = imgW / imgH;
-    const printableRatio = printableWidth / printableHeight;
-
-    let finalDataUrl = dataUrl;
-    let posX = marginMm;
-    let posY = marginMm;
-    let finalW = printableWidth;
-    let finalH = printableHeight;
-
-    if (settings.pageSize === 'original') {
-      // Original size mode: full bleed / exact fit
-      finalW = pageWidthMm;
-      finalH = pageHeightMm;
-      posX = 0;
-      posY = 0;
-    } else if (settings.imageFit === 'fill') {
-      // Fill Page: Scale to cover entire printable page, center-cropping excess without distortion
-      if (Math.abs(imgRatio - printableRatio) > 0.005) {
-        const cropCanvas = document.createElement('canvas');
-        let sWidth = imgW;
-        let sHeight = imgH;
-        let sx = 0;
-        let sy = 0;
-
-        if (imgRatio > printableRatio) {
-          // Image is wider than page ratio -> crop left and right
-          sWidth = Math.max(1, Math.round(imgH * printableRatio));
-          sx = Math.max(0, Math.round((imgW - sWidth) / 2));
-        } else {
-          // Image is taller than page ratio -> crop top and bottom
-          sHeight = Math.max(1, Math.round(imgW / printableRatio));
-          sy = Math.max(0, Math.round((imgH - sHeight) / 2));
-        }
-
-        cropCanvas.width = sWidth;
-        cropCanvas.height = sHeight;
-        const cropCtx = cropCanvas.getContext('2d');
-
-        if (cropCtx) {
-          const tempImg = new Image();
-          await new Promise<void>((resolve, reject) => {
-            tempImg.onload = () => resolve();
-            tempImg.onerror = () => reject(new Error('Image crop decode failed'));
-            tempImg.src = dataUrl;
-          });
-          cropCtx.drawImage(tempImg, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
-          finalDataUrl = cropCanvas.toDataURL('image/jpeg', qualityFactor);
-        }
-      }
-      finalW = printableWidth;
-      finalH = printableHeight;
-      posX = marginMm;
-      posY = marginMm;
-    } else {
-      // Fit to Page (Default): Scale proportionally so entire image is visible, centered on page
-      if (imgRatio > printableRatio) {
-        finalW = printableWidth;
-        finalH = printableWidth / imgRatio;
+      let pageOrientation: 'p' | 'l' = 'p';
+      if (settings.orientation === 'portrait') {
+        pageOrientation = 'p';
+      } else if (settings.orientation === 'landscape') {
+        pageOrientation = 'l';
       } else {
-        finalH = printableHeight;
-        finalW = printableHeight * imgRatio;
+        pageOrientation = visualW > visualH ? 'l' : 'p';
       }
-      posX = marginMm + (printableWidth - finalW) / 2;
-      posY = marginMm + (printableHeight - finalH) / 2;
-    }
 
-    doc!.addImage(finalDataUrl, format, posX, posY, finalW, finalH, undefined, 'FAST');
+      let pageWidthMm = 210;
+      let pageHeightMm = 297;
+      let formatArg: string | [number, number] = 'a4';
+
+      if (settings.pageSize === 'letter') {
+        pageWidthMm = pageOrientation === 'l' ? 279.4 : 215.9;
+        pageHeightMm = pageOrientation === 'l' ? 215.9 : 279.4;
+        formatArg = 'letter';
+      } else if (settings.pageSize === 'original') {
+        const standardWidthMm = 210;
+        pageWidthMm = standardWidthMm;
+        pageHeightMm = (visualH / Math.max(1, visualW)) * standardWidthMm;
+        pageOrientation = pageWidthMm > pageHeightMm ? 'l' : 'p';
+        formatArg = [pageWidthMm, pageHeightMm];
+      } else {
+        pageWidthMm = pageOrientation === 'l' ? 297 : 210;
+        pageHeightMm = pageOrientation === 'l' ? 210 : 297;
+        formatArg = 'a4';
+      }
+
+      // Initialize jsPDF document on first page, or add new page
+      if (i === 0) {
+        doc = new jsPDF({
+          orientation: pageOrientation,
+          unit: 'mm',
+          format: formatArg,
+          compress: true,
+        });
+      } else {
+        doc!.addPage(formatArg, pageOrientation);
+      }
+
+      // Margins
+      let marginMm = 0;
+      if (settings.margin === 'small') marginMm = 6;
+      if (settings.margin === 'medium') marginMm = 14;
+
+      const printableWidth = Math.max(10, pageWidthMm - marginMm * 2);
+      const printableHeight = Math.max(10, pageHeightMm - marginMm * 2);
+      const printableRatio = printableWidth / printableHeight;
+
+      // Render image in single pass
+      const targetRatioForCrop = settings.imageFit === 'fill' && settings.pageSize !== 'original'
+        ? printableRatio
+        : undefined;
+
+      let rendered: { dataUrl: string; width: number; height: number };
+      try {
+        rendered = renderImageToJpegDataUrl(
+          imgElem,
+          rawW,
+          rawH,
+          imgItem.rotation,
+          maxDimension,
+          qualityFactor,
+          targetRatioForCrop
+        );
+      } catch (renderErr) {
+        console.warn('Full quality render failed, attempting fallback resolution:', renderErr);
+        // Fallback with lower resolution if device was under memory pressure
+        rendered = renderImageToJpegDataUrl(
+          imgElem,
+          rawW,
+          rawH,
+          imgItem.rotation,
+          1000,
+          0.65,
+          targetRatioForCrop
+        );
+      }
+
+      const imgW = rendered.width;
+      const imgH = rendered.height;
+      const imgRatio = imgW / Math.max(1, imgH);
+
+      let posX = marginMm;
+      let posY = marginMm;
+      let finalW = printableWidth;
+      let finalH = printableHeight;
+
+      if (settings.pageSize === 'original') {
+        finalW = pageWidthMm;
+        finalH = pageHeightMm;
+        posX = 0;
+        posY = 0;
+      } else if (settings.imageFit === 'fill') {
+        finalW = printableWidth;
+        finalH = printableHeight;
+        posX = marginMm;
+        posY = marginMm;
+      } else {
+        // Fit proportionally inside printable area
+        if (imgRatio > printableRatio) {
+          finalW = printableWidth;
+          finalH = printableWidth / imgRatio;
+        } else {
+          finalH = printableHeight;
+          finalW = printableHeight * imgRatio;
+        }
+        posX = marginMm + (printableWidth - finalW) / 2;
+        posY = marginMm + (printableHeight - finalH) / 2;
+      }
+
+      // Add image to PDF page
+      doc!.addImage(rendered.dataUrl, 'JPEG', posX, posY, finalW, finalH, undefined, 'FAST');
+    } finally {
+      cleanup();
+    }
   }
 
   if (!doc) {
-    throw new Error('Failed to generate PDF document');
+    throw new Error('Failed to generate PDF document.');
   }
 
-  const baseFileName = settings.fileName && settings.fileName.trim().length > 0 
-    ? settings.fileName 
+  const baseFileName = settings.fileName && settings.fileName.trim().length > 0
+    ? settings.fileName
     : generateDefaultPdfFileName();
   const finalFileName = sanitizeFileName(baseFileName);
+
   const pdfBlob = doc.output('blob');
   const pdfUrl = URL.createObjectURL(pdfBlob);
 
